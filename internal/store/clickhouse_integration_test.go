@@ -147,7 +147,7 @@ func TestCHRoundTrip(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	pb, profit, trash, err := ch.Postbacks(ctx, from, to, group, 100)
+	pb, profit, trash, err := ch.Postbacks(ctx, from, to, group, "", 100)
 	if err != nil {
 		t.Fatalf("Postbacks: %v", err)
 	}

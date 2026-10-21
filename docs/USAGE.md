@@ -125,7 +125,11 @@ the uniqueness cookie the client sets, `ztu` by default).
   card is not a tracked click; the follow-up to `/<id>` is.
 - With a keyword: `http://host/<id>?q=KEYWORD`
 - With extra params: `http://host/<id>?p1=...&p2=...` → macros `[PAR-1..5]`
-- Postback pixel: `http://host/?pb=KEY&cid=[CID]&profit=1.50&status=sale` (`status` required; optional `&tid=` transaction id)
+- Postback pixel: `http://host/?pb=KEY&cid=[CID]&profit=1.50&status=sale` (`status` required; optional `&tid=` transaction id).
+  Statuses: `lead`, `sale`, `rejected`, `registration`, `deposit`, `trash`,
+  plus your own `[a-z0-9_]{1,32}`. Only `trash` moves the amount from Revenue
+  to Revenue (trash); every status is kept in the conversion log. A postback
+  without a valid status is ignored (HTTP 200).
 - Any query-string variable can be a stream condition ("URL parameter":
   `utm_source=fb`, or just `sub1` for "present").
 
@@ -156,7 +160,9 @@ flow; breakdowns by country / device / OS / browser / source / network),
 **Flows** (below), **Logs** (filters as dropdowns with checkboxes, values
 loaded from the data of the period via `GET /api/logs/filters`; IP field;
 humans/bots; CSV; a row opens the visit's detail — routing, location, network,
-User-Agent, referer), **Conversions**, **Keywords**, **Lists** (`.dat` editor),
+User-Agent, referer), **Conversions** (filter by flow and status — system
+statuses are labelled, custom ones appear as “Custom · name”; CSV export),
+**Keywords**, **Lists** (`.dat` editor),
 **Tools** (below), **Automation** (below), **Settings**.
 
 ### Flows

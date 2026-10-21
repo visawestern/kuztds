@@ -995,6 +995,19 @@ function normSources(list){
     labels:(s.labels||[]).map(l=>({param:String(l.param||'').trim(),label:String(l.label||'').trim().toUpperCase()}))
       .filter(l=>l.param||l.label)}));
 }
+// Conversion types (G-062): system statuses have human labels, everything
+// matching the custom grammar stays visibly custom.
+const STATUS_LABELS={lead:'Lead',sale:'Sale',rejected:'Rejected',registration:'Registration',deposit:'Deposit',trash:'Trash'};
+function statusLabel(status){
+  const s=String(status||'').trim().toLowerCase();
+  return STATUS_LABELS[s]||(s?'Custom · '+s:'—');
+}
+function statusKind(status){
+  const s=String(status||'').trim().toLowerCase();
+  if(['lead','sale','registration','deposit'].includes(s))return 'ok';
+  if(['rejected','trash'].includes(s))return 'warn';
+  return '';
+}
 // ---- pure: end ----
 
 const TYPES={
@@ -2095,23 +2108,39 @@ function logDetail(x){
 /* ---------- CONVERSIONS ---------- */
 async function conversions(_,live){
   view().innerHTML=`<div class="ph"><h1>Conversions</h1><span class="sub">${periodLabel()}</span><div class="spacer"></div><span id="pb-total" class="muted"></span></div>
-    <div class="toolbar"><select id="pb-group"><option value="">All flows</option></select></div><div id="pb-wrap">${stateHTML('Loading…')}</div>`;
-  q('#pb-group').onchange=loadPostbacks;
+    <div class="toolbar"><select id="pb-group"><option value="">All flows</option></select>
+      <select id="pb-status"><option value="">All statuses</option></select>
+      <button id="pb-export">Export CSV</button></div><div id="pb-wrap">${stateHTML('Loading…')}</div>`;
+  q('#pb-group').onchange=()=>{loadPbStatuses();loadPostbacks()};
+  q('#pb-status').onchange=loadPostbacks;
+  q('#pb-export').onclick=()=>{
+    const g=q('#pb-group').value, st=q('#pb-status').value;
+    window.open('/api/postbacks/export?'+rangeQS()+(g?'&group='+encodeURIComponent(g):'')+(st?'&status='+encodeURIComponent(st):''),'_blank');
+  };
+  loadPbStatuses();
   loadPostbacks();
   // Postbacks carry the flow's display name — that is what the engine writes with a conversion.
   const gs=await ensureGroups().catch(()=>[]);
   const s=q('#pb-group'); if(!s||!live())return;
   gs.forEach(g=>{if(g.name)s.insertAdjacentHTML('beforeend',opt(g.name,g.id+' — '+g.name,''))});
 }
+async function loadPbStatuses(){
+  const g=q('#pb-group').value, sel=q('#pb-status'); if(!sel)return;
+  const r=await get('/api/postbacks/statuses?'+rangeQS()+(g?'&group='+encodeURIComponent(g):''),null);
+  if(!q('#pb-status'))return;
+  const cur=sel.value;
+  sel.innerHTML=opt('','All statuses','')+(Array.isArray(r)?r.map(x=>opt(x.key,statusLabel(x.key)+' ('+fmt(x.count)+')',x.key)).join(''):'');
+  if([...sel.options].some(o=>o.value===cur))sel.value=cur;
+}
 async function loadPostbacks(){
-  const g=q('#pb-group').value;
-  const r=await get('/api/postbacks?'+rangeQS()+(g?'&group='+encodeURIComponent(g):''),null);
+  const g=q('#pb-group').value, st=q('#pb-status')?q('#pb-status').value:'';
+  const r=await get('/api/postbacks?'+rangeQS()+(g?'&group='+encodeURIComponent(g):'')+(st?'&status='+encodeURIComponent(st):''),null);
   const wrap=q('#pb-wrap'); if(!wrap)return;
   if(!r||!r.rows){wrap.innerHTML=stateHTML('Conversions are not available — is ClickHouse connected?','err');return}
   q('#pb-total').innerHTML=`${fmt(r.rows.length)} conversion${r.rows.length===1?'':'s'} · profit <b class="ok">${money(r.total)}</b>${r.trash?` · trash <b>${money(r.trash)}</b>`:''}`;
-  if(!r.rows.length){wrap.innerHTML=`<div class="card">${stateHTML('No conversions in this period')}</div>`;return}
+  if(!r.rows.length){wrap.innerHTML=`<div class="card">${stateHTML('No conversions match these filters')}</div>`;return}
   wrap.innerHTML=`<div class="tw"><table><thead><tr><th>Time</th><th>Flow</th><th>Stream</th><th>Offer</th><th>Status</th><th>Source</th><th>Device</th><th>Country</th><th>City</th><th class="num">Profit</th><th class="num">Cost</th><th>Click ID</th><th>Txn</th></tr></thead><tbody>${
-    r.rows.map(x=>`<tr><td>${when(x.ts)}</td><td>${esc(x.group)}</td><td>${esc(x.stream)}</td><td class="mono">${dash(x.offer)?esc(x.offer):'—'}</td><td>${esc(x.status||'')}</td><td class="ell">${esc(x.domain)}</td><td>${esc(x.device)}</td><td><span class="flag">${flag(x.country)}</span>${esc(x.country)}</td><td>${esc(x.city)}</td><td class="num ok">${money(x.profit)}</td><td class="num">${x.cost?money(x.cost):'—'}</td><td class="mono">${esc(x.cid)}</td><td class="mono">${esc(x.tid||'')}</td></tr>`).join('')}</tbody></table></div>`;
+    r.rows.map(x=>`<tr><td>${when(x.ts)}</td><td>${esc(x.group)}</td><td>${esc(x.stream)}</td><td class="mono">${dash(x.offer)?esc(x.offer):'—'}</td><td>${x.status?`<span class="pill ${statusKind(x.status)}">${esc(statusLabel(x.status))}</span>`:'—'}</td><td class="ell">${esc(x.domain)}</td><td>${esc(x.device)}</td><td><span class="flag">${flag(x.country)}</span>${esc(x.country)}</td><td>${esc(x.city)}</td><td class="num ok">${money(x.profit)}</td><td class="num">${x.cost?money(x.cost):'—'}</td><td class="mono">${esc(x.cid)}</td><td class="mono">${esc(x.tid||'')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 /* ---------- KEYWORDS ---------- */

@@ -179,5 +179,14 @@ eq(normVerifications([{name:' google123.html ',content:' proof\n'},{name:'',cont
   [{name:'google123.html',content:' proof\n'}], 'verification rows are trimmed and empty rows dropped');
 eq(normVerifications(null), [], 'no verification files');
 
+// Conversion types (G-062): system statuses get labels, custom stays custom.
+eq(statusLabel('lead'), 'Lead', 'lead label');
+eq(statusLabel(' SALE '), 'Sale', 'status labels ignore case and spaces');
+eq(statusLabel('vip_level2'), 'Custom · vip_level2', 'a custom status keeps its name');
+eq(statusLabel(''), '—', 'an empty status has no label');
+eq(statusKind('sale'), 'ok', 'sale is a good status');
+eq(statusKind('trash'), 'warn', 'trash is a warning status');
+eq(statusKind('vip_level2'), '', 'a custom status has no system colour');
+
 if (failed) { console.log(failed + ' check(s) failed'); process.exit(1); }
 `

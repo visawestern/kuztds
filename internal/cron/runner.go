@@ -107,7 +107,7 @@ func known(job string) bool {
 
 // PostbackSource is the part of the statistics store the conversions job uses.
 type PostbackSource interface {
-	Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]store.PostbackRow, float64, float64, error)
+	Postbacks(ctx context.Context, from, to time.Time, group, status string, limit int) ([]store.PostbackRow, float64, float64, error)
 }
 
 // Runner executes the jobs on schedule.

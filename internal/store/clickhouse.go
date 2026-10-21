@@ -677,19 +677,26 @@ type PostbackRow struct {
 
 // Postbacks returns conversions over a period (optional group filter),
 // the Revenue total (excluding trash) and the Revenue (trash) total.
-func (c *CH) Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]PostbackRow, float64, float64, error) {
+func (c *CH) Postbacks(ctx context.Context, from, to time.Time, group, status string, limit int) ([]PostbackRow, float64, float64, error) {
 	where := "ts >= ? AND ts < ?"
 	args := []any{from, to}
 	if group != "" {
 		where += " AND group_name = ?"
 		args = append(args, group)
 	}
+	if status != "" {
+		if !c.postbackCols {
+			return []PostbackRow{}, 0, 0, nil
+		}
+		where += " AND status = ?"
+		args = append(args, status)
+	}
 	rev, trashExpr := profitSums(c.postbackCols)
 	var total, trash float64
 	if err := c.conn.QueryRow(ctx, "SELECT "+rev+", "+trashExpr+" FROM postbacks WHERE "+where, args...).Scan(&total, &trash); err != nil {
 		return nil, 0, 0, err
 	}
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > 50000 {
 		limit = 200
 	}
 	rows, err := c.conn.Query(ctx,
@@ -715,6 +722,34 @@ func (c *CH) Postbacks(ctx context.Context, from, to time.Time, group string, li
 		out = append(out, p)
 	}
 	return out, total, trash, rows.Err()
+}
+
+// PostbackStatuses returns the conversion types present in the period, with
+// counts, so the admin can offer the exact set including custom statuses.
+func (c *CH) PostbackStatuses(ctx context.Context, from, to time.Time, group string) ([]KV, error) {
+	if !c.postbackCols {
+		return []KV{}, nil
+	}
+	where := "ts >= ? AND ts < ? AND status != ''"
+	args := []any{from, to}
+	if group != "" {
+		where += " AND group_name = ?"
+		args = append(args, group)
+	}
+	rows, err := c.conn.Query(ctx, "SELECT status, count() FROM postbacks WHERE "+where+" GROUP BY status ORDER BY status", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []KV{}
+	for rows.Next() {
+		var k KV
+		if err := rows.Scan(&k.Key, &k.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
 }
 
 // InsertEvents inserts a batch of events in a single batch request (lock-free).

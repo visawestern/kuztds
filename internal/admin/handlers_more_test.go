@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -680,4 +681,40 @@ func TestNotFoundAPI(t *testing.T) {
 		t.Errorf("clear page → %d, want 200", r.StatusCode)
 	}
 	r.Body.Close()
+}
+
+// G-062: conversion types are filterable, exported and invalid statuses are
+// refused instead of silently matching nothing.
+func TestConversionStatusesAndExport(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, _ := authedClient(t, srv.URL)
+	for _, path := range []string{
+		"/api/postbacks/statuses?group=g1",
+		"/api/postbacks?group=g1&status=sale",
+		"/api/postbacks?group=g1&status=vip_level2",
+		"/api/postbacks/export?group=g1&status=trash",
+	} {
+		resp, err := c.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s → 200, got %d", path, resp.StatusCode)
+		}
+	}
+	resp, _ := c.Get(srv.URL + "/api/postbacks?status=not/a/status")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("invalid status filter → 400, got %d", resp.StatusCode)
+	}
+	resp, _ = c.Get(srv.URL + "/api/postbacks/export?status=sale")
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/csv") {
+		t.Errorf("export Content-Type = %q", got)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "status") || !strings.Contains(string(body), "sale") {
+		t.Errorf("export body = %q", body)
+	}
 }

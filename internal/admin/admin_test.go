@@ -32,8 +32,11 @@ func (fakeStats) Performance(context.Context, time.Time, time.Time) ([]store.Per
 func (fakeStats) Logs(context.Context, store.LogFilter) ([]store.LogRow, int64, error) {
 	return []store.LogRow{{IP: "1.2.3.4", Country: "ru"}}, 1, nil
 }
-func (fakeStats) Postbacks(context.Context, time.Time, time.Time, string, int) ([]store.PostbackRow, float64, float64, error) {
-	return []store.PostbackRow{{Profit: 1.5}}, 1.5, 0, nil
+func (fakeStats) Postbacks(context.Context, time.Time, time.Time, string, string, int) ([]store.PostbackRow, float64, float64, error) {
+	return []store.PostbackRow{{Profit: 1.5, Status: "sale"}}, 1.5, 0, nil
+}
+func (fakeStats) PostbackStatuses(context.Context, time.Time, time.Time, string) ([]store.KV, error) {
+	return []store.KV{{Key: "sale", Count: 1}}, nil
 }
 func (fakeStats) DeleteGroupLogs(context.Context, string) error { return nil }
 

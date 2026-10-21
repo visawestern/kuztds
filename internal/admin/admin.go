@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/egerkuzma/kuztds/internal/config"
+	"github.com/egerkuzma/kuztds/internal/conversion"
 	"github.com/egerkuzma/kuztds/internal/security"
 	"github.com/egerkuzma/kuztds/internal/store"
 )
@@ -37,7 +38,8 @@ type StatsProvider interface {
 	Breakdown(ctx context.Context, from, to time.Time, dim string, limit int) ([]store.KV, error)
 	Performance(ctx context.Context, from, to time.Time) ([]store.PerfRow, error)
 	Logs(ctx context.Context, f store.LogFilter) ([]store.LogRow, int64, error)
-	Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]store.PostbackRow, float64, float64, error)
+	Postbacks(ctx context.Context, from, to time.Time, group, status string, limit int) ([]store.PostbackRow, float64, float64, error)
+	PostbackStatuses(ctx context.Context, from, to time.Time, group string) ([]store.KV, error)
 	DeleteGroupLogs(ctx context.Context, group string) error
 }
 
@@ -260,6 +262,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/logs/export", s.auth(http.HandlerFunc(s.handleLogsExport)))
 	mux.Handle("DELETE /api/logs", s.auth(http.HandlerFunc(s.handleDeleteLogs)))
 	mux.Handle("GET /api/postbacks", s.auth(http.HandlerFunc(s.handlePostbacks)))
+	mux.Handle("GET /api/postbacks/statuses", s.auth(http.HandlerFunc(s.handlePostbackStatuses)))
+	mux.Handle("GET /api/postbacks/export", s.auth(http.HandlerFunc(s.handlePostbacksExport)))
 	mux.Handle("GET /api/keys", s.auth(http.HandlerFunc(s.handleKeys)))
 
 	mux.Handle("GET /api/groups", s.auth(http.HandlerFunc(s.handleGroupsGet)))
@@ -717,7 +721,12 @@ func (s *Server) handlePostbacks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	from, to := parseRange(r)
-	rows, total, trash, err := s.cfg.Stats.Postbacks(r.Context(), from, to, r.URL.Query().Get("group"), atoiDef(r.URL.Query().Get("limit"), 200))
+	status, ok := postbackStatus(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "unknown status")
+		return
+	}
+	rows, total, trash, err := s.cfg.Stats.Postbacks(r.Context(), from, to, r.URL.Query().Get("group"), status, atoiDef(r.URL.Query().Get("limit"), 200))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "postbacks error")
 		return
@@ -805,6 +814,64 @@ func (s *Server) handleNotFoundSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// postbackStatus normalizes the status filter; custom statuses are allowed.
+func postbackStatus(r *http.Request) (string, bool) {
+	raw := r.URL.Query().Get("status")
+	if raw == "" {
+		return "", true
+	}
+	return conversion.ParseStatus(raw)
+}
+
+func (s *Server) handlePostbackStatuses(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Stats == nil {
+		writeErr(w, http.StatusServiceUnavailable, "stats unavailable")
+		return
+	}
+	from, to := parseRange(r)
+	rows, err := s.cfg.Stats.PostbackStatuses(r.Context(), from, to, r.URL.Query().Get("group"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "postbacks error")
+		return
+	}
+	if rows == nil {
+		rows = []store.KV{}
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) handlePostbacksExport(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Stats == nil {
+		writeErr(w, http.StatusServiceUnavailable, "stats unavailable")
+		return
+	}
+	status, ok := postbackStatus(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "unknown status")
+		return
+	}
+	from, to := parseRange(r)
+	rows, _, _, err := s.cfg.Stats.Postbacks(r.Context(), from, to, r.URL.Query().Get("group"), status, 50000)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "postbacks error")
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=conversions.csv")
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"ts", "group", "stream", "offer", "status", "source", "page", "device", "country", "city", "profit", "cost", "cid", "tid"})
+	for _, x := range rows {
+		rec := []string{x.TS.Format(time.RFC3339), x.Group, x.Stream, x.Offer, x.Status, x.Domain, x.Page,
+			x.Device, x.Country, x.City, strconv.FormatFloat(x.Profit, 'f', 2, 64),
+			strconv.FormatFloat(x.Cost, 'f', 2, 64), x.CID, x.TID}
+		for i := range rec {
+			rec[i] = csvSafe(rec[i])
+		}
+		_ = cw.Write(rec)
+	}
+	cw.Flush()
 }
 
 func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
