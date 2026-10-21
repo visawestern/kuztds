@@ -81,8 +81,92 @@ type Group struct {
 	// G-055: ready-made traffic source templates and the active one.
 	Sources []TrafficSource `json:"sources"`
 	Source  string          `json:"source"`
+	// G-056: affiliate network templates, referenced by offers.
+	Networks []Network `json:"networks"`
 
 	Streams []Stream `json:"streams"`
+}
+
+// Network is an affiliate network template (G-056): the token names its
+// cabinet uses for the postback values, so the admin can print a ready link.
+type Network struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	CIDToken    string `json:"cid_token"`
+	ProfitToken string `json:"profit_token"`
+	StatusToken string `json:"status_token"`
+	TxnToken    string `json:"txn_token"`
+}
+
+var (
+	networkTokenRe = regexp.MustCompile(`^\{[A-Za-z0-9_.-]{1,32}\}$`)
+	// Defaults when a template leaves a token empty: what most cabinets use.
+	networkDefaultCID, networkDefaultProfit = "{subid}", "{payout}"
+	networkDefaultStatus, networkDefaultTxn = "{status}", "{txn}"
+)
+
+// Tokens returns the cabinet placeholders, filling the defaults for blanks.
+func (n Network) Tokens() (cid, profit, status, txn string) {
+	pick := func(v, def string) string {
+		if strings.TrimSpace(v) == "" {
+			return def
+		}
+		return strings.TrimSpace(v)
+	}
+	return pick(n.CIDToken, networkDefaultCID), pick(n.ProfitToken, networkDefaultProfit),
+		pick(n.StatusToken, networkDefaultStatus), pick(n.TxnToken, networkDefaultTxn)
+}
+
+// ValidateNetworks rejects templates the admin could not print, and offers that
+// point at a template that does not exist.
+func (g Group) ValidateNetworks() error {
+	seen := map[string]bool{}
+	for i, n := range g.Networks {
+		if !sourceIDRe.MatchString(n.ID) {
+			return fmt.Errorf("config: group %s network %d: id %q must be letters, digits, _ or -", g.ID, i+1, n.ID)
+		}
+		if seen[n.ID] {
+			return fmt.Errorf("config: group %s: duplicate network id %q", g.ID, n.ID)
+		}
+		seen[n.ID] = true
+		used := map[string]bool{}
+		for _, tok := range []string{n.CIDToken, n.ProfitToken, n.StatusToken, n.TxnToken} {
+			tok = strings.TrimSpace(tok)
+			if tok == "" {
+				continue
+			}
+			if !networkTokenRe.MatchString(tok) {
+				return fmt.Errorf("config: group %s network %q: token %q must look like {subid}", g.ID, n.ID, tok)
+			}
+			if used[tok] {
+				return fmt.Errorf("config: group %s network %q: token %q is used twice", g.ID, n.ID, tok)
+			}
+			used[tok] = true
+		}
+	}
+	for _, o := range g.Offers {
+		if o.NetworkID == "" {
+			continue
+		}
+		if _, ok := g.Network(o.NetworkID); !ok {
+			return fmt.Errorf("config: group %s offer %q: network %q does not exist", g.ID, o.ID, o.NetworkID)
+		}
+	}
+	return nil
+}
+
+// Network returns an affiliate network template by id.
+func (g Group) Network(id string) (Network, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Network{}, false
+	}
+	for _, n := range g.Networks {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return Network{}, false
 }
 
 // TrafficSource is a template of query parameters to macro labels, so a flow
@@ -230,6 +314,8 @@ type Offer struct {
 	Fallback string  `json:"fallback"`  // G-050: offer served once the cap is reached
 	// G-054: ISO 3166-1 alpha-2 countries the network buys; empty = all.
 	Countries []string `json:"countries"`
+	// G-056: affiliate network template; the free-text Network stays the label.
+	NetworkID string `json:"network_id"`
 }
 
 var (

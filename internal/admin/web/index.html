@@ -408,7 +408,7 @@ function ago(iso){
   return w+u[0]+' '+u[1]+z;
 }
 
-let CSRF='', USER='', ENGINE='', HOURS=24, RENDER=0;
+let CSRF='', USER='', ENGINE='', POSTBACK_KEY='', HOURS=24, RENDER=0;
 const PERIODS={24:'24 hours',168:'7 days',720:'30 days'};
 const periodLabel=()=>PERIODS[HOURS]||HOURS+' h';
 function rangeQS(){const to=new Date(),from=new Date(to-HOURS*3600*1000);return `from=${from.toISOString()}&to=${to.toISOString()}`}
@@ -580,7 +580,7 @@ function route(){
 function go(path){if(location.hash==='#/'+path)render();else location.hash='#/'+path}
 
 async function boot(){
-  try{const me=await call('GET','/api/me');CSRF=me.csrf;ENGINE=me.engine||'';USER=me.user;app(me.user)}
+  try{const me=await call('GET','/api/me');CSRF=me.csrf;ENGINE=me.engine||'';POSTBACK_KEY=me.postback_key||'';USER=me.user;app(me.user)}
   catch(e){loginView()}
 }
 function loginView(msg=''){
@@ -964,6 +964,19 @@ function normOffers(list){
     cap_daily:Math.max(0,Math.floor(+o.cap_daily||0)),fallback:String(o.fallback||'').trim(),
     countries:(Array.isArray(o.countries)?o.countries:String(o.countries||'').split(/[,\s]+/))
       .map(c=>String(c).trim().toUpperCase()).filter(Boolean).filter((c,i,a)=>a.indexOf(c)===i)}));
+}
+function normNetworks(list){
+  const tok=(v,d)=>{const s=String(v||'').trim();return s||d};
+  return (list||[]).map(n=>({id:String(n.id||'').trim(),name:String(n.name||'').trim(),
+    cid_token:tok(n.cid_token,'{subid}'),profit_token:tok(n.profit_token,'{payout}'),
+    status_token:tok(n.status_token,'{status}'),txn_token:tok(n.txn_token,'{txn}')}));
+}
+function postbackMemo(base,key,networkID,networks){
+  if(!base||!key)return '';
+  const n=(networks||[]).find(x=>x.id===String(networkID||''))||{};
+  const u=base.replace(/\/$/,'')+'/?pb='+encodeURIComponent(key||'POSTBACK_KEY');
+  return u+'&cid='+(n.cid_token||'{subid}')+'&profit='+(n.profit_token||'{payout}')+
+    '&status='+(n.status_token||'{status}')+'&tid='+(n.txn_token||'{txn}');
 }
 function normSources(list){
   return (list||[]).map(s=>({id:String(s.id||'').trim(),name:String(s.name||'').trim(),
@@ -1723,15 +1736,16 @@ function collectStream(){
 }
 
 /* ---------- flow settings (drawer) ---------- */
-const offerCard=(o,i,list)=>`<div class="card pad" data-off="${i}" style="margin-bottom:8px">
+const offerCard=(o,i,list,networks)=>{const memo=postbackMemo(ENGINE,POSTBACK_KEY,o.network_id,networks);return `<div class="card pad" data-off="${i}" style="margin-bottom:8px">
   <div class="g2">
     <div class="fld"><label>ID — a stream output points at it</label><input class="off-id" value="${esc(o.id||'')}" placeholder="o1" autocomplete="off"></div>
     <div class="fld"><label>Name</label><input class="off-name" value="${esc(o.name||'')}" placeholder="for you, shown in reports" autocomplete="off"></div>
   </div>
   <div class="g2">
-    <div class="fld"><label>Network</label><input class="off-net" value="${esc(o.network||'')}" placeholder="partner network" autocomplete="off"></div>
+    <div class="fld"><label>Network template — its tokens build the postback link</label><select class="off-netid"><option value="">— no template —</option>${(networks||[]).filter(n=>n.id).map(n=>`<option value="${esc(n.id)}"${n.id===o.network_id?' selected':''}>${esc(n.id+(n.name?' — '+n.name:''))}</option>`).join('')}</select></div>
     <div class="fld"><label>Status</label><label class="chk"><input type="checkbox" class="off-on" ${o.status?'checked':''}>enabled — a disabled offer is not served and sends visits to the trash</label></div>
   </div>
+  <div class="fld"><label>Network label — shown in reports</label><input class="off-net" value="${esc(o.network||'')}" placeholder="partner network" autocomplete="off"></div>
   <div class="g2">
     <div class="fld"><label>Payout per conversion</label><input type="number" class="off-payout" min="0" step="any" value="${o.payout||0}"></div>
     <div class="fld"><label>Payout currency (empty = USD)</label><input class="off-cur" maxlength="3" value="${esc(o.currency||'')}" placeholder="USD" autocomplete="off"></div>
@@ -1746,7 +1760,24 @@ const offerCard=(o,i,list)=>`<div class="card pad" data-off="${i}" style="margin
   </div>
   <div class="fld"><label>URL — macros like [CID], [PAR-1] work</label><input class="off-url" value="${esc(o.url||'')}" placeholder="https://net.example/?cid=[CID]" autocomplete="off"></div>
   <div class="hint">The postback's <code>profit=</code> wins; without an amount the payout is used, converted to USD with the ECB rates.</div>
+  ${memo?`<div class="fld"><label>Paste into the network cabinet</label><div class="row"><code class="mono ell" style="flex:1">${esc(memo)}</code><button type="button" class="sm" data-memo="${esc(memo)}">copy</button></div></div>`:`<div class="hint">Set KUZTDS_POSTBACK_KEY and an engine URL to see the postback link for this network.</div>`}
   <div class="row"><button class="sm ghost" data-offdel="${i}">${icon('trash')}Remove</button></div>
+</div>`};
+const networkCard=(n,i)=>`<div class="card pad" data-net="${i}" style="margin-bottom:8px">
+  <div class="g2">
+    <div class="fld"><label>ID</label><input class="net-id" value="${esc(n.id||'')}" placeholder="sticky" autocomplete="off"></div>
+    <div class="fld"><label>Name</label><input class="net-name" value="${esc(n.name||'')}" placeholder="StickyAds" autocomplete="off"></div>
+  </div>
+  <div class="g2">
+    <div class="fld"><label>Click id token</label><input class="net-cid mono" value="${esc(n.cid_token||'')}" placeholder="{subid}" autocomplete="off" spellcheck="false"></div>
+    <div class="fld"><label>Profit token</label><input class="net-profit mono" value="${esc(n.profit_token||'')}" placeholder="{payout}" autocomplete="off" spellcheck="false"></div>
+  </div>
+  <div class="g2">
+    <div class="fld"><label>Status token</label><input class="net-status mono" value="${esc(n.status_token||'')}" placeholder="{status}" autocomplete="off" spellcheck="false"></div>
+    <div class="fld"><label>Txn token</label><input class="net-txn mono" value="${esc(n.txn_token||'')}" placeholder="{txn}" autocomplete="off" spellcheck="false"></div>
+  </div>
+  <div class="hint">Empty fields fall back to {subid}, {payout}, {status}, {txn}. These are the network's placeholders: kuzTDS prints them into the postback link that you paste into its cabinet.</div>
+  <div class="row"><button type="button" class="sm ghost" data-netdel="${i}">${icon('trash')}Remove network</button></div>
 </div>`;
 const srcLabelRow=(l)=>`<div class="src-label"><input class="sl-param mono" value="${esc(l.param||'')}" placeholder="gclid" autocomplete="off" spellcheck="false"><span class="subtle">→</span><input class="sl-label mono" value="${esc(l.label||'')}" placeholder="GCLID" autocomplete="off" spellcheck="false"><button type="button" class="icon sm ghost" data-lbldel title="Remove this label">${icon('x')}</button></div>`;
 const sourceCard=(s,i)=>`<div class="card pad" data-src="${i}" style="margin-bottom:8px">
@@ -1819,8 +1850,12 @@ function openFlowSettings(focus){
       <button id="g_src_add">${icon('plus')}Add template</button>
       <div class="hint">Only the active template expands in the output. A label may not shadow a built-in macro ([CID], [COUNTRY], [KEY]…).</div>
     </div>
+    <div class="sec" id="sec-networks"><div class="st">Affiliate networks — postback tokens</div>
+      <div id="g_networks">${(g.networks||[]).map(networkCard).join('')||'<div class="hint">No network templates yet. Add the token names your cabinet uses.</div>'}</div>
+      <button id="g_net_add">${icon('plus')}Add network</button>
+    </div>
     <div class="sec" id="sec-offers"><div class="st">Offers — where this flow can send visitors</div>
-      <div id="g_offers">${(g.offers||[]).map(offerCard).join('')||'<div class="hint">No offers yet. A stream output of type Offer names one or more ids, e.g. o1|||backup.</div>'}</div>
+      <div id="g_offers">${(g.offers||[]).map((o,i)=>offerCard(o,i,g.offers,g.networks)).join('')||'<div class="hint">No offers yet. A stream output of type Offer names one or more ids, e.g. o1|||backup.</div>'}</div>
       <button id="g_off_add">${icon('plus')}Add offer</button>
     </div>
     <div class="sec"><div class="st">Links</div>
@@ -1846,6 +1881,11 @@ function openFlowSettings(focus){
     qa('[data-offdel]',b).forEach(btn=>btn.onclick=()=>{
       collectFlow(); g.offers=(g.offers||[]).filter((_,i)=>i!==+btn.dataset.offdel); markDirty(); bind();
     });
+    q('#g_net_add',b).onclick=()=>{collectFlow();g.networks=[...(g.networks||[]),{id:'',name:''}];markDirty();bind()};
+    qa('[data-netdel]',b).forEach(btn=>btn.onclick=()=>{
+      collectFlow(); g.networks=(g.networks||[]).filter((_,i)=>i!==+btn.dataset.netdel); markDirty(); bind();
+    });
+    qa('[data-memo]',b).forEach(btn=>btn.onclick=()=>copyText(btn.dataset.memo,btn));
     q('#g_src_add',b).onclick=()=>{collectFlow();g.sources=[...(g.sources||[]),{id:'',name:'',labels:[]}];markDirty();bind()};
     qa('[data-srcdel]',b).forEach(btn=>btn.onclick=()=>{
       collectFlow(); g.sources=(g.sources||[]).filter((_,i)=>i!==+btn.dataset.srcdel); markDirty(); bind();
@@ -1891,6 +1931,9 @@ function collectFlow(){
     currency:val('g_cost_cur').trim().toUpperCase(),payout_pct:+val('g_cost_payout')||0,
     loss_pct:+val('g_cost_loss')||0,postback_pct:val('g_cost_pb')==='' ? 100 : (+val('g_cost_pb')||0)};
   g.cost=normCost(g.cost);
+  if(q('#g_networks',d))g.networks=normNetworks([...d.querySelectorAll('[data-net]')].map(r=>({
+    id:q('.net-id',r).value,name:q('.net-name',r).value,cid_token:q('.net-cid',r).value,
+    profit_token:q('.net-profit',r).value,status_token:q('.net-status',r).value,txn_token:q('.net-txn',r).value})));
   if(q('#g_sources',d)){
     g.sources=normSources([...d.querySelectorAll('[data-src]')].map(r=>({
       id:q('.src-id',r).value,name:q('.src-name',r).value,
@@ -1905,7 +1948,7 @@ function collectFlow(){
     network:q('.off-net',r).value,url:q('.off-url',r).value,status:q('.off-on',r).checked,
     payout:q('.off-payout',r).value,currency:q('.off-cur',r).value,
     cap_daily:q('.off-cap',r).value,fallback:q('.off-fb',r).value,
-    countries:q('.off-countries',r).value})));
+    countries:q('.off-countries',r).value,network_id:q('.off-netid',r).value})));
   // Keep the address bar and the links pointing at this flow in step with its ID.
   if(g.id&&g.id!==was){
     GROUPS.forEach(x=>{if(x.redirect==='group'&&(x.out||'').trim()===was)x.out=g.id;(x.streams||[]).forEach(s=>{if(s.out&&s.out.redirect==='group'&&(s.out.out||'').trim()===was)s.out.out=g.id})});

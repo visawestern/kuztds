@@ -66,6 +66,7 @@ func fullServer(t *testing.T, limiter LoginLimiter) (*httptest.Server, *fakeGrou
 		Sessions: security.NewMemoryStore(),
 		Stats:    fakeStats{}, Groups: fg, Lists: fl, Keys: fakeKeys{},
 		Limiter: limiter, SessionTTL: time.Hour, CookieSecure: false,
+		EngineURL: "http://engine.local", PostbackKey: "pb-secret",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -415,5 +416,59 @@ func TestGroupsSaveRejectsBadSource(t *testing.T) {
 	}
 	if code := put(`[{"id":"x","source":"google","sources":[{"id":"google","name":"Google Ads","labels":[{"param":"gclid","label":"gclid"},{"param":"utm_source","label":"SRC"}]}]}]`); code != http.StatusOK {
 		t.Errorf("valid source → 200, got %d", code)
+	}
+}
+
+// G-056: broken affiliate network templates and dangling offer references are
+// refused at save time.
+func TestGroupsSaveRejectsBadNetwork(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	for _, payload := range []string{
+		`[{"id":"x","networks":[{"name":"net"}]}]`,
+		`[{"id":"x","networks":[{"id":"a"},{"id":"a"}]}]`,
+		`[{"id":"x","networks":[{"id":"a","cid_token":"subid"}]}]`,
+		`[{"id":"x","networks":[{"id":"a","cid_token":"{sub id}"}]}]`,
+		`[{"id":"x","networks":[{"id":"a","cid_token":"{x}","profit_token":"{x}"}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","status":true,"network_id":"nope"}]}]`,
+	} {
+		if code := put(payload); code != http.StatusBadRequest {
+			t.Errorf("bad network %s → 400, got %d", payload, code)
+		}
+	}
+	if code := put(`[{"id":"x","offers":[{"id":"o1","url":"https://a","status":true,"network_id":"sticky"}],"networks":[{"id":"sticky","name":"StickyAds","cid_token":"{sub1}","profit_token":"{payout}"}]}]`); code != http.StatusOK {
+		t.Errorf("valid network → 200, got %d", code)
+	}
+}
+
+// G-057: the memo needs the engine base and the postback key; both reach the
+// authenticated admin only.
+func TestMePostbackKey(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, _ := authedClient(t, srv.URL)
+	resp, err := c.Get(srv.URL + "/api/me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var me map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		t.Fatal(err)
+	}
+	if me["engine"] != "http://engine.local" || me["postback_key"] != "pb-secret" {
+		t.Errorf("/api/me = %v, want the engine base and the postback key", me)
+	}
+	anon := &http.Client{}
+	if r, _ := anon.Get(srv.URL + "/api/me"); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("anonymous /api/me = %d, want 401", r.StatusCode)
+	} else {
+		r.Body.Close()
 	}
 }

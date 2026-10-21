@@ -129,7 +129,8 @@ not like a script.**
   offer; an offer can also be limited to the countries its network buys. A
   stream may rotate several offers (``o1|||backup``) with the same distribution
   switch; traffic source templates map ad-network parameters (``gclid``) to
-  short macros (``[GCLID]``).
+  short macros (``[GCLID]``); affiliate network templates keep cabinet token
+  names and print the ready postback link.
 - Output-variant distribution with `|||`: `random` / `rotator` (cookie) /
   `evenly` (Redis counter).
 - `chance` (show with probability), `separation` (swap output by keyword from a

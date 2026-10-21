@@ -36,7 +36,8 @@
         "currency": "EUR",
         "cap_daily": 10,
         "fallback": "backup",
-        "countries": ["DE", "FR", "AT"]
+        "countries": ["DE", "FR", "AT"],
+        "network_id": "sticky"
       },
       {
         "id": "backup",
@@ -59,6 +60,16 @@
         "currency": "",
         "cap_daily": 0,
         "fallback": ""
+      }
+    ],
+    "networks": [
+      {
+        "id": "sticky",
+        "name": "StickyAds",
+        "cid_token": "{sub1}",
+        "profit_token": "{payout}",
+        "status_token": "{status}",
+        "txn_token": "{txn}"
       }
     ],
     "sources": [

@@ -161,6 +161,12 @@ eq(normOffers(null), [], 'no offers');
 eq(normSources([{id:' google ',name:' Google Ads ',labels:[{param:' gclid ',label:'gclid'},{param:'',label:''}]}]),
   [{id:'google',name:'Google Ads',labels:[{param:'gclid',label:'GCLID'}]}], 'source labels are trimmed, upper-cased and empty rows dropped');
 eq(normSources(null), [], 'no sources');
+eq(normNetworks([{id:' sticky ',name:' StickyAds ',cid_token:' {sub1} ',profit_token:'',status_token:' {status} ',txn_token:' {txn} '}]),
+  [{id:'sticky',name:'StickyAds',cid_token:'{sub1}',profit_token:'{payout}',status_token:'{status}',txn_token:'{txn}'}], 'network tokens default and trim');
+eq(postbackMemo('https://tds.example/','K','sticky',[{id:'sticky',cid_token:'{sub1}',profit_token:'{payout}',status_token:'{status}',txn_token:'{txn}'}]),
+  'https://tds.example/?pb=K&cid={sub1}&profit={payout}&status={status}&tid={txn}','memo uses the network tokens');
+eq(postbackMemo('','K','',[]), '','memo needs an engine base');
+eq(postbackMemo('https://tds.example/','','',[]), '','memo needs the postback key');
 
 if (failed) { console.log(failed + ' check(s) failed'); process.exit(1); }
 `

@@ -82,6 +82,7 @@ type Config struct {
 	SessionTTL   time.Duration
 	CookieSecure bool
 	EngineURL    string // base URL of the engine for building group links
+	PostbackKey  string // KUZTDS_POSTBACK_KEY, for the postback memo (G-057)
 	PasswordFile string // file with the argon2id hash (overrides PasswordHash, written on change)
 	Log          slogLogger
 
@@ -399,7 +400,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	sess := sessionFrom(r.Context())
-	writeJSON(w, http.StatusOK, map[string]string{"user": sess.User, "csrf": sess.CSRF, "engine": s.cfg.EngineURL})
+	writeJSON(w, http.StatusOK, map[string]string{"user": sess.User, "csrf": sess.CSRF, "engine": s.cfg.EngineURL, "postback_key": s.cfg.PostbackKey})
 }
 
 // handlePassword changes the administrator password (argon2id), saving the hash to a file.
@@ -770,6 +771,11 @@ func (s *Server) handleGroupsSave(w http.ResponseWriter, r *http.Request) {
 		}
 		// G-055: a broken source template would leave [LABEL] unexpanded.
 		if err := g.ValidateSources(); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// G-056: a network template with broken tokens cannot print a postback.
+		if err := g.ValidateNetworks(); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}

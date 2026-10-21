@@ -43,6 +43,7 @@ func main() {
 		SessionTTL:   12 * time.Hour,
 		CookieSecure: getenv("KUZTDS_ADMIN_COOKIE_SECURE", "true") == "true",
 		EngineURL:    getenv("KUZTDS_ENGINE_URL", "http://localhost:8080"),
+		PostbackKey:  os.Getenv("KUZTDS_POSTBACK_KEY"),
 		PasswordFile: os.Getenv("KUZTDS_ADMIN_PASSWORD_FILE"),
 		Sessions:     security.NewMemoryStore(), // overridden by Redis below
 		Limiter:      allowAll{},

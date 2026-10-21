@@ -354,6 +354,16 @@ spent on them, the conversions with their revenue, and net Profit = revenue −
 click cost − conversion cost. A visit that never reached an offer keeps an
 empty offer cell, exactly as before.
 
+An affiliate network template (Flow settings → Affiliate networks) keeps the
+token names its cabinet uses for the click id, profit, status and transaction.
+An offer picks a template, and the offer card then shows the ready postback
+link to paste into that cabinet:
+`https://tds.example/?pb=KEY&cid={sub1}&profit={payout}&status={status}&tid={txn}`.
+Empty token fields fall back to `{subid}`, `{payout}`, `{status}`, `{txn}`. The
+link needs `KUZTDS_POSTBACK_KEY` on both the engine and the admin, plus
+`KUZTDS_ENGINE_URL` on the admin. Delete the parameters the cabinet does not
+send before pasting the link.
+
 An offer may also list the countries its network buys (`countries`, ISO
 alpha-2). A visit from another country goes to the offer's fallback; when the
 fallback does not buy that country either, or there is none, the visit gets
