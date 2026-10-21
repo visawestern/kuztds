@@ -82,6 +82,7 @@ go run ./cmd/cron
 | `KUZTDS_API_KEY` | key for the `?api=` mode (api clients) |
 | `KUZTDS_KEYS_DIR` | directory for collected keywords |
 | `KUZTDS_VERIFY_FILE` | root verification files for ad cabinets (`<data dir>/verify.json`) |
+| `KUZTDS_404_FILE` | custom 404 page for trash mode 3 (`<data dir>/404.html`) |
 | `KUZTDS_TRASH_MODE` / `KUZTDS_TRASH_URL` | behavior for an unknown group (0=200,1=redirect,2=403,3=404) |
 | `KUZTDS_CURL_CACHE` | CURL redirect cache, minutes |
 | `KUZTDS_CURL_UA` | User-Agent the engine sends for CURL / `[REMOTE]` fetches |
@@ -101,6 +102,7 @@ go run ./cmd/cron
 | `KUZTDS_GEO_DB` / `KUZTDS_ASN_DB` | same paths as the engine — used by Tools (IP lookup) and "Test a visitor" |
 | `KUZTDS_CRON_FILE` | the cron service's config file; without it the Automation page is read-only |
 | `KUZTDS_VERIFY_FILE` | same file as the engine — edited on the Tools page |
+| `KUZTDS_404_FILE` | same page as the engine — edited on the Tools page |
 
 ### cron
 | Variable | Purpose |
@@ -241,6 +243,12 @@ The same page holds **Domain verification**: add the exact file names and
 contents an ad cabinet asked you to host (Google, Facebook, TikTok…). The engine
 serves each one at `/<name>` on its next reload. A name that equals a flow ID,
 alias or clean link is rejected — the flow would win the path.
+
+**Custom 404** on the same page replaces the built-in 404 for trash mode 3
+(`KUZTDS_TRASH_MODE=3`): whenever the engine falls back to trash — an unknown
+or switched-off flow, a broken flow link, a failed proxy fetch — the visitor
+gets your HTML with a 404 status. Leave it empty to keep the built-in answer;
+other trash modes are not affected.
 
 ### Automation
 

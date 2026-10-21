@@ -163,6 +163,8 @@ func main() {
 	// G-060: root files that ad cabinets fetch to verify the domain.
 	verifs := newVerificationStore(getenv("KUZTDS_VERIFY_FILE", filepath.Join(dataDir, "verify.json")), log)
 	go verifs.watch(ctx, reload)
+	notFound := newNotFoundStore(getenv("KUZTDS_404_FILE", filepath.Join(dataDir, "404.html")), log)
+	go notFound.watch(ctx, reload)
 
 	// ClickHouse logs (phase 4): asynchronous batch writes. Optional.
 	var logs *logbuf.Buffer
@@ -189,7 +191,7 @@ func main() {
 
 	d := &engineDeps{
 		log: log, lists: lists, sigs: sigs, seps: seps, geores: geores, counters: counters,
-		groups: groups, logs: logs, chConn: chConn, rates: rates, verifs: verifs, fetcher: fetcher,
+		groups: groups, logs: logs, chConn: chConn, rates: rates, verifs: verifs, notFound: notFound, fetcher: fetcher,
 		dataDir: dataDir, keysDir: keysDir, postbackKey: postbackKey, apiKey: apiKey,
 		trashMode: trashMode, trashURL: trashURL, curlCacheMin: curlCacheMin,
 	}
@@ -378,6 +380,21 @@ func variantIndex(i, n int) int {
 		return 0
 	}
 	return i
+}
+
+// trash answers an unknown/disabled group. G-132: in 404 mode an operator's
+// page replaces the built-in one; other modes keep their configured answer.
+func (d *engineDeps) trash() render.Result {
+	res := trashResult(d.trashMode, d.trashURL)
+	if res.Status != http.StatusNotFound || d.notFound == nil {
+		return res
+	}
+	body, ok := d.notFound.Get()
+	if !ok {
+		return res
+	}
+	res.ContentType, res.Body = "text/html; charset=utf-8", body
+	return res
 }
 
 // trashResult builds the response for an unknown/disabled group (trash modes).

@@ -83,6 +83,11 @@ func main() {
 	} else if cfg.DataDir != "" {
 		cfg.Verify = admin.NewFileVerifications(filepath.Join(cfg.DataDir, "verify.json"))
 	}
+	if nf := os.Getenv("KUZTDS_404_FILE"); nf != "" {
+		cfg.NotFound = admin.NewFileNotFound(nf)
+	} else if cfg.DataDir != "" {
+		cfg.NotFound = admin.NewFileNotFound(filepath.Join(cfg.DataDir, "404.html"))
+	}
 	cfg.GeoCityPath, cfg.GeoASNPath = os.Getenv("KUZTDS_GEO_DB"), os.Getenv("KUZTDS_ASN_DB")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

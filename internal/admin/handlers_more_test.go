@@ -15,6 +15,14 @@ import (
 	"github.com/egerkuzma/kuztds/internal/security"
 )
 
+type fakeNotFound struct{ html string }
+
+func (f *fakeNotFound) Get(context.Context) (string, error) { return f.html, nil }
+func (f *fakeNotFound) Save(_ context.Context, html string) error {
+	f.html = html
+	return nil
+}
+
 type fakeVerify struct{ doc config.Verifications }
 
 func (f *fakeVerify) List(context.Context) (config.Verifications, error) {
@@ -81,7 +89,7 @@ func fullServerVerify(t *testing.T, limiter LoginLimiter, fv *fakeVerify) (*http
 	s, err := New(Config{
 		AdminUser: "admin", PasswordHash: hash,
 		Sessions: security.NewMemoryStore(),
-		Stats:    fakeStats{}, Groups: fg, Lists: fl, Verify: fv, Keys: fakeKeys{},
+		Stats:    fakeStats{}, Groups: fg, Lists: fl, Verify: fv, NotFound: &fakeNotFound{}, Keys: fakeKeys{},
 		Limiter: limiter, SessionTTL: time.Hour, CookieSecure: false,
 		EngineURL: "http://engine.local", PostbackKey: "pb-secret",
 	})
@@ -624,4 +632,52 @@ func TestGroupsSaveRejectsVerificationCollision(t *testing.T) {
 	if code := put(`[{"id":"promo"}]`); code != http.StatusOK {
 		t.Errorf("free flow → 200, got %d", code)
 	}
+}
+
+// G-132: the custom 404 page is edited as HTML and bounded.
+func TestNotFoundAPI(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+	do := func(method, payload string) *http.Response {
+		req, _ := http.NewRequest(method, srv.URL+"/api/notfound", strings.NewReader(payload))
+		if method != http.MethodGet {
+			req.Header.Set("X-CSRF-Token", csrf)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	r := do(http.MethodGet, "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("GET = %d", r.StatusCode)
+	}
+	var doc struct {
+		HTML string `json:"html"`
+	}
+	json.NewDecoder(r.Body).Decode(&doc)
+	r.Body.Close()
+	if doc.HTML != "" {
+		t.Errorf("empty page = %q", doc.HTML)
+	}
+	if r = do(http.MethodPut, `{"html":"<h1>lost</h1>"}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("PUT = %d", r.StatusCode)
+	}
+	r.Body.Close()
+	r = do(http.MethodGet, "")
+	json.NewDecoder(r.Body).Decode(&doc)
+	r.Body.Close()
+	if doc.HTML != "<h1>lost</h1>" {
+		t.Errorf("saved page = %q", doc.HTML)
+	}
+	big := `{"html":"` + strings.Repeat("x", config.MaxNotFoundBytes+1) + `"}`
+	if r = do(http.MethodPut, big); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("oversized page → %d, want 400", r.StatusCode)
+	}
+	r.Body.Close()
+	if r = do(http.MethodPut, `{"html":""}`); r.StatusCode != http.StatusOK {
+		t.Errorf("clear page → %d, want 200", r.StatusCode)
+	}
+	r.Body.Close()
 }

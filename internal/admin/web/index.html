@@ -2173,6 +2173,13 @@ async function tools(arg,live){
       <div class="hint" style="margin-bottom:10px">An ad cabinet proves the tracker domain by fetching a file from its root. Add the exact file name and contents the cabinet gave you; the engine serves it at <code class="mono">/name</code> on its next reload. Names may not shadow a flow ID, an alias or a clean link.</div>
       <div id="vf-rows"></div>
       <div class="row wrap" style="margin-top:8px"><button class="sm" id="vf-add">${icon('plus')}Add file</button><span class="spacer"></span><button class="primary" id="vf-save">Save files</button></div>
+    </div>
+    <h2 style="margin-top:28px">Custom 404</h2>
+    <div class="card pad">
+      <div class="hint" style="margin-bottom:10px">Shown when trash mode is <code class="mono">3</code> (404) and the engine falls back to trash: an unknown or switched-off flow, a broken flow link, or a failed proxy fetch. Leave it empty to keep the built-in page. HTML is served as written.</div>
+      <textarea id="nf-html" class="code" rows="6" spellcheck="false" placeholder="&lt;!doctype html&gt;…"></textarea>
+      <div class="row wrap" style="margin-top:8px"><span class="spacer"></span><button class="primary" id="nf-save">Save page</button></div>
+      <div id="nf-state"></div>
     </div>`;
   const run=async()=>{
     LOOKUP=q('#lk-ip').value.trim(); if(!LOOKUP)return;
@@ -2206,6 +2213,21 @@ async function tools(arg,live){
       VERIFICATIONS=(r&&r.files)||[]; paintVerifications();
     }catch(e){if(q('#vf-rows'))q('#vf-rows').innerHTML=stateHTML(e.message,'err')}
   })();
+  q('#nf-save').onclick=saveNotFound;
+  (async()=>{
+    try{
+      const r=await call('GET','/api/notfound'); if(!live())return;
+      const ta=q('#nf-html'); if(ta)ta.value=(r&&r.html)||'';
+    }catch(e){const st=q('#nf-state');if(st)st.innerHTML=stateHTML(e.message,'err')}
+  })();
+}
+async function saveNotFound(){
+  const ta=q('#nf-html'), st=q('#nf-state');
+  try{
+    await call('PUT','/api/notfound',{html:ta?ta.value:''});
+    if(st)st.innerHTML='';
+    toast('404 page saved');
+  }catch(e){toast(e.message,true)}
 }
 function collectVerifications(){
   if(!q('#vf-rows'))return;

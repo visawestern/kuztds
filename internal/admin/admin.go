@@ -42,6 +42,12 @@ type StatsProvider interface {
 }
 
 // VerificationsStore reads and writes the domain verification files (G-060).
+// NotFoundStore edits the custom 404 page (G-132).
+type NotFoundStore interface {
+	Get(ctx context.Context) (string, error)
+	Save(ctx context.Context, html string) error
+}
+
 type VerificationsStore interface {
 	List(ctx context.Context) (config.Verifications, error)
 	Save(ctx context.Context, doc config.Verifications) error
@@ -84,6 +90,7 @@ type Config struct {
 	Groups       GroupsStore
 	Lists        ListsStore
 	Verify       VerificationsStore // G-060: root files for ad cabinets
+	NotFound     NotFoundStore      // G-132: custom 404 page
 	Keys         KeysReader
 	Limiter      LoginLimiter
 	SessionTTL   time.Duration
@@ -264,6 +271,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/verifications", s.auth(http.HandlerFunc(s.handleVerificationsGet)))
 	mux.Handle("PUT /api/verifications", s.auth(http.HandlerFunc(s.handleVerificationsSave)))
+	mux.Handle("GET /api/notfound", s.auth(http.HandlerFunc(s.handleNotFoundGet)))
+	mux.Handle("PUT /api/notfound", s.auth(http.HandlerFunc(s.handleNotFoundSave)))
 
 	mux.Handle("GET /api/lookup", s.auth(http.HandlerFunc(s.handleLookup)))
 	mux.Handle("POST /api/simulate", s.auth(http.HandlerFunc(s.handleSimulate)))
@@ -756,6 +765,42 @@ func (s *Server) handleVerificationsSave(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.cfg.Verify.Save(r.Context(), doc); err != nil {
+		writeErr(w, http.StatusInternalServerError, "save error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+func (s *Server) handleNotFoundGet(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.NotFound == nil {
+		writeErr(w, http.StatusServiceUnavailable, "404 page unavailable")
+		return
+	}
+	html, err := s.cfg.NotFound.Get(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "404 page error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"html": html})
+}
+
+func (s *Server) handleNotFoundSave(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.NotFound == nil {
+		writeErr(w, http.StatusServiceUnavailable, "404 page unavailable")
+		return
+	}
+	var doc struct {
+		HTML string `json:"html"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&doc); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if len(doc.HTML) > config.MaxNotFoundBytes {
+		writeErr(w, http.StatusBadRequest, "404 page is larger than 64 KiB")
+		return
+	}
+	if err := s.cfg.NotFound.Save(r.Context(), doc.HTML); err != nil {
 		writeErr(w, http.StatusInternalServerError, "save error")
 		return
 	}

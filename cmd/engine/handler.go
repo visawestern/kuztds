@@ -42,6 +42,7 @@ type engineDeps struct {
 	rates        *ratesStore
 	fetcher      *fetch.Client
 	verifs       *verificationStore
+	notFound     *notFoundStore
 	dataDir      string
 	keysDir      string
 	postbackKey  string
@@ -247,7 +248,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		if oneSegment && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			if sg, ok := d.groups.GetShare(gid); ok {
 				if !sg.Status {
-					trashResult(d.trashMode, d.trashURL).Write(w)
+					d.trash().Write(w)
 					return
 				}
 				serveShare(w, r, sg)
@@ -256,7 +257,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if grp == nil || !grp.Status {
-		trashResult(d.trashMode, d.trashURL).Write(w)
+		d.trash().Write(w)
 		return
 	}
 
@@ -396,7 +397,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		// is a configuration error; the visitor gets what an unknown group gets.
 		if next == nil || !next.Status || next == grp || hop >= config.MaxGroupHops {
 			d.log.Warn("engine: group link not followed", "group", grp.ID, "stream", streamName, "target", outRaw, "hop", hop)
-			trashResult(d.trashMode, d.trashURL).Write(w)
+			d.trash().Write(w)
 			return
 		}
 		if via == "" {
@@ -473,7 +474,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(servable) == 0 {
 			d.log.Warn("engine: offer not served", "group", grp.ID, "stream", streamName, "offer", strings.TrimSpace(outRaw))
-			trashResult(d.trashMode, d.trashURL).Write(w)
+			d.trash().Write(w)
 			return
 		}
 		// A separate key keeps the offer rotation state from mixing with the
@@ -488,7 +489,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 				off = fb
 			} else {
 				d.log.Warn("engine: offer does not buy the country", "group", grp.ID, "offer", off.ID, "country", country)
-				trashResult(d.trashMode, d.trashURL).Write(w)
+				d.trash().Write(w)
 				return
 			}
 		}
@@ -506,7 +507,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 					off = fb
 				} else {
 					d.log.Warn("engine: offer cap reached, no fallback", "group", grp.ID, "offer", off.ID)
-					trashResult(d.trashMode, d.trashURL).Write(w)
+					d.trash().Write(w)
 					return
 				}
 			}
@@ -591,7 +592,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 			// engine already gives when it cannot serve a group. Anything is
 			// better than a blank 200, which burns the click and hides it.
 			logRedirect = "curl_error"
-			res = trashResult(d.trashMode, d.trashURL)
+			res = d.trash()
 			d.log.Error("engine: curl fetch failed", "group", grp.ID, "stream", streamName, "url", out)
 		}
 	} else {

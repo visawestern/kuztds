@@ -52,6 +52,7 @@ type engHarness struct {
 	geoMMDB   bool              // attach the test mmdb
 	trashMode string
 	trashURL  string
+	notFound  string // 404.html served in trash mode 3
 }
 
 func newEng(t *testing.T, groups *config.Groups, h engHarness) http.Handler {
@@ -64,6 +65,12 @@ func newEng(t *testing.T, groups *config.Groups, h engHarness) http.Handler {
 	}
 	log := discardLog()
 	verifs := newVerificationStore(filepath.Join(dir, "verify.json"), log)
+	if h.notFound != "" {
+		if err := os.WriteFile(filepath.Join(dir, "404.html"), []byte(h.notFound), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notFound := newNotFoundStore(filepath.Join(dir, "404.html"), log)
 	lists := ipindex.NewSet(dir, log)
 	lists.Load(ipLists...)
 	lists.Load(ipListFiles(groups)...) // custom ip_list files from the groups
@@ -71,7 +78,7 @@ func newEng(t *testing.T, groups *config.Groups, h engHarness) http.Handler {
 	seps := seplist.NewSet(dir, log)
 	seps.Load(separationFiles(groups)...)
 	d := &engineDeps{
-		log: log, lists: lists, sigs: sigs, seps: seps, geores: geo.Nop{}, groups: groups, verifs: verifs,
+		log: log, lists: lists, sigs: sigs, seps: seps, geores: geo.Nop{}, groups: groups, verifs: verifs, notFound: notFound,
 		dataDir: dir, keysDir: dir, postbackKey: "pb", apiKey: "k",
 		fetcher: fetch.New("", nil), trashMode: h.trashMode, trashURL: h.trashURL,
 	}
@@ -911,5 +918,27 @@ func TestE2E_DomainVerification(t *testing.T) {
 		if strings.Contains(rec.Body.String(), "google-site-verification") || strings.Contains(rec.Body.String(), "fb-proof") {
 			t.Errorf("%s must not serve a verification file: %q", p, rec.Body.String())
 		}
+	}
+}
+
+// G-132: trash mode 3 serves the operator's page instead of the built-in 404.
+func TestE2E_CustomNotFound(t *testing.T) {
+	gg := group(config.Stream{Name: "s", Status: true, Type: config.StreamRegular,
+		Out: config.Output{Redirect: "show_text", Out: "ok"}})
+	ua := map[string]string{"User-Agent": uaWinChrome}
+	h := engHarness{trashMode: "3", notFound: "<h1>nothing here</h1>"}
+	r := do(t, newEng(t, gg, h), "/missing", "8.8.8.8", ua)
+	if r.Code != 404 || !strings.Contains(r.Body.String(), "nothing here") || !strings.Contains(r.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("custom 404 = %d %q %q", r.Code, r.Header().Get("Content-Type"), r.Body.String())
+	}
+	// A known flow is untouched.
+	r = do(t, newEng(t, gg, h), "/g1", "8.8.8.8", ua)
+	if r.Code != 200 || r.Body.String() != "ok" {
+		t.Fatalf("known flow = %d %q", r.Code, r.Body.String())
+	}
+	// Without a page the built-in 404 stays.
+	r = do(t, newEng(t, gg, engHarness{trashMode: "3"}), "/missing", "8.8.8.8", ua)
+	if r.Code != 404 || strings.Contains(r.Body.String(), "nothing here") {
+		t.Fatalf("default 404 = %d %q", r.Code, r.Body.String())
 	}
 }
