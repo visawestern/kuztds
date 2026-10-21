@@ -117,3 +117,37 @@ func TestEffectiveProfit(t *testing.T) {
 		t.Errorf("GBP without a rate = (%v,%v), want (0,false)", got, ok)
 	}
 }
+
+// G-054: an offer is served only to the countries it buys; otherwise the
+// fallback is tried, and without one the visit gets the trash answer.
+func TestOfferCountries(t *testing.T) {
+	g := config.NewGroups(&config.Group{
+		ID: "g", Status: true, Redirect: "stop",
+		Offers: []config.Offer{
+			{ID: "o1", URL: "https://main.example", Status: true, Countries: []string{"DE", "FR"}, Fallback: "o2"},
+			{ID: "o2", URL: "https://backup.example", Status: true, Countries: []string{"US"}},
+		},
+		Streams: []config.Stream{{Name: "s", Status: true, Out: config.Output{Redirect: "offer", Out: "o1"}}},
+	})
+	h, _, stop := curlEnv(t, g, "0")
+	defer stop()
+	cases := map[string]string{"DE": "https://main.example", "US": "https://backup.example", "RU": ""}
+	for country, want := range cases {
+		rec := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome, "CF-IPCountry": country})
+		if got := rec.Header().Get("Location"); got != want {
+			t.Errorf("%s: Location = %q, want %q", country, got, want)
+		}
+	}
+
+	noFallback := config.NewGroups(&config.Group{
+		ID: "g", Status: true, Redirect: "stop",
+		Offers:  []config.Offer{{ID: "o1", URL: "https://main.example", Status: true, Countries: []string{"DE"}}},
+		Streams: []config.Stream{{Name: "s", Status: true, Out: config.Output{Redirect: "offer", Out: "o1"}}},
+	})
+	h2, _, stop2 := curlEnv(t, noFallback, "0")
+	defer stop2()
+	rec := do(t, h2, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome, "CF-IPCountry": "US"})
+	if rec.Code != 200 || rec.Header().Get("Location") != "" {
+		t.Errorf("country outside the offer: got %d %q, want the trash answer", rec.Code, rec.Header().Get("Location"))
+	}
+}

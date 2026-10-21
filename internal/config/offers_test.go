@@ -59,3 +59,34 @@ func TestGroupOfferLookup(t *testing.T) {
 		t.Error("empty id reported found")
 	}
 }
+
+// G-054: an offer may be limited to the countries its network buys.
+func TestOfferCountriesValidate(t *testing.T) {
+	geo := Group{Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, Countries: []string{"de", "US"}}}}
+	if err := geo.ValidateOffers(); err != nil {
+		t.Errorf("offers with countries: %v", err)
+	}
+	cases := map[string]Group{
+		"country is not ISO":   {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, Countries: []string{"USA"}}}},
+		"country with a digit": {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, Countries: []string{"D1"}}}},
+		"duplicate country":    {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, Countries: []string{"DE", "de"}}}},
+	}
+	for name, g := range cases {
+		if err := g.ValidateOffers(); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+func TestOfferAcceptsCountry(t *testing.T) {
+	all := Offer{ID: "all"}
+	if !all.AcceptsCountry("RU") || !all.AcceptsCountry("") {
+		t.Error("an offer without countries must accept everyone")
+	}
+	geo := Offer{ID: "geo", Countries: []string{"DE", "FR"}}
+	for country, want := range map[string]bool{"DE": true, "fr": true, "US": false, "": false} {
+		if got := geo.AcceptsCountry(country); got != want {
+			t.Errorf("AcceptsCountry(%q) = %v, want %v", country, got, want)
+		}
+	}
+}

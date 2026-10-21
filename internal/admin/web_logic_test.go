@@ -152,9 +152,11 @@ eq(normCost(null),
 
 // Offers as collectFlow stores them (G-048).
 eq(normOffers([{id:' o1 ',name:' Main ',network:' net ',url:' https://x ',status:1,payout:'1.5',currency:' eur ',cap_daily:'3',fallback:' o2 '}]),
-  [{id:'o1',name:'Main',network:'net',url:'https://x',status:true,payout:1.5,currency:'EUR',cap_daily:3,fallback:'o2'}], 'offers are trimmed');
+  [{id:'o1',name:'Main',network:'net',url:'https://x',status:true,payout:1.5,currency:'EUR',cap_daily:3,fallback:'o2',countries:[]}], 'offers are trimmed');
 eq(normOffers([{id:'o1',payout:'-2',currency:'',cap_daily:'-1'}]),
-  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:''}], 'negative payout and cap clamp to 0');
+  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',countries:[]}], 'negative payout and cap clamp to 0');
+eq(normOffers([{id:'o1',countries:' de, fr  de '}]),
+  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',countries:['DE','FR']}], 'countries are upper-cased, split and de-duplicated');
 eq(normOffers(null), [], 'no offers');
 
 if (failed) { console.log(failed + ' check(s) failed'); process.exit(1); }

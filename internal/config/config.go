@@ -146,11 +146,14 @@ type Offer struct {
 	Currency string  `json:"currency"`  // ISO 4217 of the payout; empty = USD
 	CapDaily int     `json:"cap_daily"` // G-050: purchases per UTC day, 0 = unlimited
 	Fallback string  `json:"fallback"`  // G-050: offer served once the cap is reached
+	// G-054: ISO 3166-1 alpha-2 countries the network buys; empty = all.
+	Countries []string `json:"countries"`
 }
 
 var (
-	offerIDRe  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	offerCurRe = regexp.MustCompile(`^[A-Za-z]{3}$`)
+	offerIDRe    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	offerCurRe   = regexp.MustCompile(`^[A-Za-z]{3}$`)
+	offerCountry = regexp.MustCompile(`^[A-Za-z]{2}$`)
 )
 
 // ValidateOffers rejects offers the engine could not serve. Disabled offers
@@ -178,6 +181,18 @@ func (g Group) ValidateOffers() error {
 		}
 		if o.Fallback == o.ID && o.ID != "" {
 			return fmt.Errorf("config: group %s offer %q: fallback must be another offer", g.ID, o.ID)
+		}
+		// G-054: countries are ISO alpha-2 codes, each listed once.
+		cc := map[string]bool{}
+		for _, c := range o.Countries {
+			c = strings.ToUpper(strings.TrimSpace(c))
+			if !offerCountry.MatchString(c) {
+				return fmt.Errorf("config: group %s offer %q: country %q must be a two-letter code", g.ID, o.ID, c)
+			}
+			if cc[c] {
+				return fmt.Errorf("config: group %s offer %q: country %q is listed twice", g.ID, o.ID, c)
+			}
+			cc[c] = true
 		}
 		if !o.Status {
 			continue
@@ -211,6 +226,21 @@ func offerURL(raw string) error {
 		return fmt.Errorf("%q is not an http(s) URL", raw)
 	}
 	return nil
+}
+
+// AcceptsCountry reports whether the offer buys traffic from the country. An
+// empty list means every country is accepted. Codes compare case-insensitively.
+func (o Offer) AcceptsCountry(country string) bool {
+	if len(o.Countries) == 0 {
+		return true
+	}
+	country = strings.ToUpper(strings.TrimSpace(country))
+	for _, c := range o.Countries {
+		if strings.ToUpper(strings.TrimSpace(c)) == country {
+			return true
+		}
+	}
+	return false
 }
 
 // Offer returns a configured offer by id. A disabled offer is still returned:

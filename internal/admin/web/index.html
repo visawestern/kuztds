@@ -959,7 +959,9 @@ function normOffers(list){
   return (list||[]).map(o=>({id:String(o.id||'').trim(),name:String(o.name||'').trim(),
     network:String(o.network||'').trim(),url:String(o.url||'').trim(),status:!!o.status,
     payout:Math.max(0,+o.payout||0),currency:String(o.currency||'').trim().toUpperCase(),
-    cap_daily:Math.max(0,Math.floor(+o.cap_daily||0)),fallback:String(o.fallback||'').trim()}));
+    cap_daily:Math.max(0,Math.floor(+o.cap_daily||0)),fallback:String(o.fallback||'').trim(),
+    countries:(Array.isArray(o.countries)?o.countries:String(o.countries||'').split(/[,\s]+/))
+      .map(c=>String(c).trim().toUpperCase()).filter(Boolean).filter((c,i,a)=>a.indexOf(c)===i)}));
 }
 // ---- pure: end ----
 
@@ -1728,7 +1730,11 @@ const offerCard=(o,i,list)=>`<div class="card pad" data-off="${i}" style="margin
   </div>
   <div class="g2">
     <div class="fld"><label>Daily purchase cap (0 = unlimited)</label><input type="number" class="off-cap" min="0" step="1" value="${o.cap_daily||0}"></div>
-    <div class="fld"><label>Fallback when the cap is reached</label><select class="off-fb"><option value="">— stop the visit (trash) —</option>${(list||[]).filter(x=>x.id&&x.id!==o.id).map(x=>`<option value="${esc(x.id)}"${x.id===o.fallback?' selected':''}>${esc(x.id+(x.name?' — '+x.name:'')+(x.status?'':' (disabled)'))}</option>`).join('')}</select></div>
+    <div class="fld"><label>Fallback when the cap is reached or the country is not bought</label><select class="off-fb"><option value="">— stop the visit (trash) —</option>${(list||[]).filter(x=>x.id&&x.id!==o.id).map(x=>`<option value="${esc(x.id)}"${x.id===o.fallback?' selected':''}>${esc(x.id+(x.name?' — '+x.name:'')+(x.status?'':' (disabled)'))}</option>`).join('')}</select></div>
+  </div>
+  <div class="g2">
+    <div class="fld"><label>Countries this offer buys (empty = all)</label><input class="off-countries" value="${esc((o.countries||[]).join(', '))}" placeholder="DE, FR" autocomplete="off"></div>
+    <div class="hint" style="align-self:end">A visit from another country goes to the fallback offer, or to the trash when there is none.</div>
   </div>
   <div class="fld"><label>URL — macros like [CID], [PAR-1] work</label><input class="off-url" value="${esc(o.url||'')}" placeholder="https://net.example/?cid=[CID]" autocomplete="off"></div>
   <div class="hint">The postback's <code>profit=</code> wins; without an amount the payout is used, converted to USD with the ECB rates.</div>
@@ -1848,7 +1854,8 @@ function collectFlow(){
     id:q('.off-id',r).value,name:q('.off-name',r).value,
     network:q('.off-net',r).value,url:q('.off-url',r).value,status:q('.off-on',r).checked,
     payout:q('.off-payout',r).value,currency:q('.off-cur',r).value,
-    cap_daily:q('.off-cap',r).value,fallback:q('.off-fb',r).value})));
+    cap_daily:q('.off-cap',r).value,fallback:q('.off-fb',r).value,
+    countries:q('.off-countries',r).value})));
   // Keep the address bar and the links pointing at this flow in step with its ID.
   if(g.id&&g.id!==was){
     GROUPS.forEach(x=>{if(x.redirect==='group'&&(x.out||'').trim()===was)x.out=g.id;(x.streams||[]).forEach(s=>{if(s.out&&s.out.redirect==='group'&&(s.out.out||'').trim()===was)s.out.out=g.id})});

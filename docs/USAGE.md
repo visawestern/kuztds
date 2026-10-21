@@ -335,6 +335,11 @@ spent on them, the conversions with their revenue, and net Profit = revenue −
 click cost − conversion cost. A visit that never reached an offer keeps an
 empty offer cell, exactly as before.
 
+An offer may also list the countries its network buys (`countries`, ISO
+alpha-2). A visit from another country goes to the offer's fallback; when the
+fallback does not buy that country either, or there is none, the visit gets
+the trash answer. An empty list means every country.
+
 ## Output macros
 
 `[KEY] [PATH] [IP] [COUNTRY] [CITY] [REGION] [ASN] [ORG] [TIMEZONE] [UTC]

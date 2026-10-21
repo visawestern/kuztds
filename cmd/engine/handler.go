@@ -416,6 +416,18 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 			trashResult(d.trashMode, d.trashURL).Write(w)
 			return
 		}
+		// G-054: the network may buy only some countries. Try its fallback; when
+		// that does not accept the country either, send the visit nowhere.
+		if !off.AcceptsCountry(country) {
+			if fb, fok := grp.Offer(off.Fallback); fok && fb.Status && fb.ID != off.ID && fb.AcceptsCountry(country) {
+				d.log.Debug("engine: offer does not buy the country, fallback", "offer", off.ID, "country", country, "fallback", fb.ID)
+				off = fb
+			} else {
+				d.log.Warn("engine: offer does not buy the country", "group", grp.ID, "offer", off.ID, "country", country)
+				trashResult(d.trashMode, d.trashURL).Write(w)
+				return
+			}
+		}
 		// G-050: a daily purchase cap moves the visit to the fallback offer.
 		// Without one the visit gets the trash answer; Redis being down must
 		// not stop the traffic.
@@ -425,7 +437,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 			case cerr != nil:
 				d.log.Warn("engine: offer cap unavailable, serving anyway", "offer", off.ID, "err", cerr)
 			case reached:
-				if fb, fok := grp.Offer(off.Fallback); fok && fb.Status && fb.ID != off.ID {
+				if fb, fok := grp.Offer(off.Fallback); fok && fb.Status && fb.ID != off.ID && fb.AcceptsCountry(country) {
 					d.log.Debug("engine: offer cap reached, fallback", "offer", off.ID, "fallback", fb.ID)
 					off = fb
 				} else {

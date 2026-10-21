@@ -126,7 +126,7 @@ not like a script.**
   offer (Redis counter per UTC day). Disabled or unknown offers get the trash answer;
   the served offer is logged with every visit and exported to CSV; performance
   and its CSV split a stream by offer, so profit and cost are visible per
-  offer.
+  offer; an offer can also be limited to the countries its network buys.
 - Output-variant distribution with `|||`: `random` / `rotator` (cookie) /
   `evenly` (Redis counter).
 - `chance` (show with probability), `separation` (swap output by keyword from a

@@ -196,13 +196,15 @@ func TestGroupsSaveRejectsBadOffer(t *testing.T) {
 		`[{"id":"x","offers":[{"id":"o1","url":"https://a","cap_daily":-1}]}]`,
 		`[{"id":"x","offers":[{"id":"o1","url":"https://a","cap_daily":1,"fallback":"nope"}]}]`,
 		`[{"id":"x","offers":[{"id":"o1","url":"https://a","cap_daily":1,"fallback":"o2"},{"id":"o2","url":"https://b","status":false}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","countries":["USA"]}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","countries":["DE","de"]}]}]`,
 	} {
 		if code := put(payload); code != http.StatusBadRequest {
 			t.Errorf("bad offer %s → 400, got %d", payload, code)
 		}
 	}
 	// A disabled draft (no link yet) and a filled enabled offer both save.
-	if code := put(`[{"id":"x","offers":[{"id":"draft"},{"id":"o2","name":"Backup","url":"https://backup.example","status":true},{"id":"o1","name":"Main","network":"net","url":"https://net.example/?cid=[CID]","status":true,"payout":1.5,"currency":"EUR","cap_daily":10,"fallback":"o2"}]}]`); code != http.StatusOK {
+	if code := put(`[{"id":"x","offers":[{"id":"draft"},{"id":"o2","name":"Backup","url":"https://backup.example","status":true},{"id":"o1","name":"Main","network":"net","url":"https://net.example/?cid=[CID]","status":true,"payout":1.5,"currency":"EUR","cap_daily":10,"fallback":"o2","countries":["de","FR"]}]}]`); code != http.StatusOK {
 		t.Errorf("valid offers → 200, got %d", code)
 	}
 }

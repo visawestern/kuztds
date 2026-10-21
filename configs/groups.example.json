@@ -35,7 +35,8 @@
         "payout": 1.5,
         "currency": "EUR",
         "cap_daily": 10,
-        "fallback": "backup"
+        "fallback": "backup",
+        "countries": ["DE", "FR", "AT"]
       },
       {
         "id": "backup",
