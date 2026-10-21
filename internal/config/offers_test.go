@@ -99,3 +99,24 @@ func TestOfferAcceptsCountry(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateOffersClickCap(t *testing.T) {
+	cases := []struct {
+		name string
+		o    Offer
+		ok   bool
+	}{
+		{"cap without redirect", Offer{ID: "o1", URL: "https://a", Status: true, ClickCap: 5}, true},
+		{"cap with https redirect", Offer{ID: "o1", URL: "https://a", Status: true, ClickCap: 5, CapURL: "https://cap"}, true},
+		{"negative cap", Offer{ID: "o1", URL: "https://a", Status: true, ClickCap: -1}, false},
+		{"relative cap URL", Offer{ID: "o1", URL: "https://a", Status: true, ClickCap: 5, CapURL: "/cap"}, false},
+		{"ftp cap URL", Offer{ID: "o1", URL: "https://a", Status: true, ClickCap: 5, CapURL: "ftp://cap"}, false},
+	}
+	for _, c := range cases {
+		g := Group{ID: "g", Offers: []Offer{c.o}}
+		err := g.ValidateOffers()
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok=%v", c.name, err, c.ok)
+		}
+	}
+}

@@ -182,6 +182,33 @@ func (c *Counters) offerKey(groupID, offerID string, now time.Time) string {
 	return "offercap:" + groupID + ":" + offerID + ":" + now.UTC().Format("20060102")
 }
 
+func (c *Counters) offerClickKey(groupID, offerID string, now time.Time) string {
+	return "offerclicks:" + groupID + ":" + offerID + ":" + now.UTC().Format("20060102")
+}
+
+// CountClick adds one served click to the offer's day and reports whether the
+// cap was already used up. The increment and the comparison are one atomic
+// round trip, so concurrent visitors cannot all slip under the last slot.
+// cap <= 0 means unlimited and does not touch Redis. Redis errors let the
+// visit through: a cap must never stop the traffic.
+func (c *Counters) CountClick(ctx context.Context, groupID, offerID string, cap int, now time.Time) (bool, error) {
+	if cap <= 0 || groupID == "" || offerID == "" {
+		return false, nil
+	}
+	key := c.offerClickKey(groupID, offerID, now)
+	n, err := c.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	if n == 1 {
+		end := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+		if err := c.rdb.ExpireAt(ctx, key, end).Err(); err != nil {
+			return false, err
+		}
+	}
+	return n > int64(cap), nil
+}
+
 // OfferCapReached reports whether the offer has used up its daily purchases.
 // cap <= 0 means unlimited. An unreadable counter fails open: the visit is
 // served rather than blocked on Redis.

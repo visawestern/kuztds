@@ -518,9 +518,34 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		offerID = off.ID
-		outRaw = off.URL
-		redirect = "http_redirect"
+		// G-287: a daily click cap redirects to CapURL, then to the fallback
+		// offer, then to the trash. The counter is incremented for every click
+		// that would have been served; Redis being down lets the click through.
+		if off.ClickCap > 0 && d.counters != nil {
+			reached, cerr := d.counters.CountClick(r.Context(), grp.ID, off.ID, off.ClickCap, time.Now())
+			switch {
+			case cerr != nil:
+				d.log.Warn("engine: offer click cap unavailable, serving anyway", "offer", off.ID, "err", cerr)
+			case reached:
+				if off.CapURL != "" {
+					d.log.Debug("engine: offer click cap reached, redirect", "offer", off.ID)
+					outRaw = off.CapURL
+					redirect = "http_redirect"
+				} else if fb, fok := grp.Offer(off.Fallback); fok && fb.Status && fb.ID != off.ID && fb.AcceptsCountry(country) {
+					d.log.Debug("engine: offer click cap reached, fallback", "offer", off.ID, "fallback", fb.ID)
+					off = fb
+				} else {
+					d.log.Warn("engine: offer click cap reached, no redirect", "group", grp.ID, "offer", off.ID)
+					d.trash().Write(w)
+					return
+				}
+			}
+		}
+		if redirect == "offer" {
+			offerID = off.ID
+			outRaw = off.URL
+			redirect = "http_redirect"
+		}
 	}
 
 	// chance: for javascript/js_selection — show with probability chance %.

@@ -162,11 +162,15 @@ eq(normCost(null),
 
 // Offers as collectFlow stores them (G-048).
 eq(normOffers([{id:' o1 ',name:' Main ',network:' net ',url:' https://x ',status:1,payout:'1.5',currency:' eur ',cap_daily:'3',fallback:' o2 '}]),
-  [{id:'o1',name:'Main',network:'net',url:'https://x',status:true,payout:1.5,currency:'EUR',cap_daily:3,fallback:'o2',countries:[]}], 'offers are trimmed');
+  [{id:'o1',name:'Main',network:'net',url:'https://x',status:true,payout:1.5,currency:'EUR',cap_daily:3,fallback:'o2',click_cap:0,cap_url:'',countries:[]}], 'offers are trimmed');
 eq(normOffers([{id:'o1',payout:'-2',currency:'',cap_daily:'-1'}]),
-  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',countries:[]}], 'negative payout and cap clamp to 0');
+  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',click_cap:0,cap_url:'',countries:[]}], 'negative payout and cap clamp to 0');
 eq(normOffers([{id:'o1',countries:' de, fr  de '}]),
-  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',countries:['DE','FR']}], 'countries are upper-cased, split and de-duplicated');
+  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',click_cap:0,cap_url:'',countries:['DE','FR']}], 'countries are upper-cased, split and de-duplicated');
+eq(normOffers([{id:'o1',click_cap:'4',cap_url:' https://cap '}]),
+  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',click_cap:4,cap_url:'https://cap',countries:[]}], 'click cap is trimmed');
+eq(normOffers([{id:'o1',click_cap:'-2'}]),
+  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',click_cap:0,cap_url:'',countries:[]}], 'negative click cap clamps to 0');
 eq(normOffers(null), [], 'no offers');
 eq(normSources([{id:' google ',name:' Google Ads ',labels:[{param:' gclid ',label:'gclid'},{param:'',label:''}]}]),
   [{id:'google',name:'Google Ads',labels:[{param:'gclid',label:'GCLID'}]}], 'source labels are trimmed, upper-cased and empty rows dropped');

@@ -97,3 +97,66 @@ func TestOfferCapWithoutFallbackServesTrash(t *testing.T) {
 		t.Errorf("cap without fallback: %d %q, want the trash answer", rec.Code, rec.Header().Get("Location"))
 	}
 }
+
+// G-287: a daily click cap redirects to the offer's cap URL, then to the
+// fallback offer, and finally to the trash when neither is configured.
+
+func clickCappedGroups(capURL string) *config.Groups {
+	return config.NewGroups(
+		&config.Group{
+			ID: "g", Status: true, Redirect: "stop",
+			Offers: []config.Offer{
+				{ID: "main", URL: "https://main.example", Status: true, ClickCap: 1, CapURL: capURL, Fallback: "backup"},
+				{ID: "backup", URL: "https://backup.example", Status: true},
+			},
+			Streams: []config.Stream{
+				{Name: "main", Status: true, Out: config.Output{Redirect: "offer", Out: "main"}},
+			},
+		},
+		&config.Group{
+			ID: "gsolo", Status: true, Redirect: "stop",
+			Offers: []config.Offer{{ID: "solo", URL: "https://solo.example", Status: true, ClickCap: 1}},
+			Streams: []config.Stream{
+				{Name: "solo", Status: true, Out: config.Output{Redirect: "offer", Out: "solo"}},
+			},
+		})
+}
+
+func TestOfferClickCapRedirects(t *testing.T) {
+	c, mr := newOfferCounters(t)
+	defer mr.Close()
+	h, _, stop := curlEnvWith(t, clickCappedGroups("https://capped.example"), "0", func(d *engineDeps) { d.counters = c })
+	defer stop()
+	first := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	if first.Code != 302 || !strings.HasPrefix(first.Header().Get("Location"), "https://main.example") {
+		t.Fatalf("first click: %d %q, want the offer", first.Code, first.Header().Get("Location"))
+	}
+	second := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	if second.Code != 302 || second.Header().Get("Location") != "https://capped.example" {
+		t.Fatalf("second click: %d %q, want the cap URL", second.Code, second.Header().Get("Location"))
+	}
+}
+
+func TestOfferClickCapFallsBackWithoutURL(t *testing.T) {
+	c, mr := newOfferCounters(t)
+	defer mr.Close()
+	h, _, stop := curlEnvWith(t, clickCappedGroups(""), "0", func(d *engineDeps) { d.counters = c })
+	defer stop()
+	_ = do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	second := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	if second.Code != 302 || !strings.HasPrefix(second.Header().Get("Location"), "https://backup.example") {
+		t.Fatalf("capped click: %d %q, want the fallback", second.Code, second.Header().Get("Location"))
+	}
+}
+
+func TestOfferClickCapWithoutFallbackIsTrash(t *testing.T) {
+	c, mr := newOfferCounters(t)
+	defer mr.Close()
+	h, _, stop := curlEnvWith(t, clickCappedGroups(""), "0", func(d *engineDeps) { d.counters = c })
+	defer stop()
+	_ = do(t, h, "/gsolo", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	second := do(t, h, "/gsolo", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	if second.Code != 200 {
+		t.Fatalf("capped standalone offer: %d, want trash 200", second.Code)
+	}
+}

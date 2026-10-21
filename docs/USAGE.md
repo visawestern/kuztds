@@ -377,7 +377,11 @@ gets the trash answer. A purchase is counted when the postback is accepted
 (a `trash` reversal does not spend a slot). The counter lives in Redis, keyed
 by flow, offer and UTC date and expiring with the day; if Redis is unreachable
 the engine serves the offer rather than blocking traffic. The fallback itself
-is served without a cap check, so two offers cannot loop. Purchases are counted
+is served without a cap check, so two offers cannot loop. A second cap,
+`click_cap`, limits served clicks per UTC day; once it is spent the visit goes
+to `cap_url` (macros work there), or to the fallback offer when no URL is set,
+or to the trash. The click counter is incremented atomically before the visit
+leaves and also fails open. Purchases are counted
 from postbacks, and the count needs the offer recorded on the visit: when
 ClickHouse cannot name it, the counter is not incremented (the cap fails open).
 

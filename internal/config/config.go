@@ -324,6 +324,10 @@ type Offer struct {
 	Currency string  `json:"currency"`  // ISO 4217 of the payout; empty = USD
 	CapDaily int     `json:"cap_daily"` // G-050: purchases per UTC day, 0 = unlimited
 	Fallback string  `json:"fallback"`  // G-050: offer served once the cap is reached
+	// G-287: clicks per UTC day after which the visit goes to CapURL (or the
+	// fallback offer, or the trash). 0 = unlimited.
+	ClickCap int    `json:"click_cap"`
+	CapURL   string `json:"cap_url"`
 	// G-054: ISO 3166-1 alpha-2 countries the network buys; empty = all.
 	Countries []string `json:"countries"`
 	// G-056: affiliate network template; the free-text Network stays the label.
@@ -358,6 +362,14 @@ func (g Group) ValidateOffers() error {
 		}
 		if o.CapDaily < 0 {
 			return fmt.Errorf("config: group %s offer %q: daily cap must not be negative", g.ID, o.ID)
+		}
+		if o.ClickCap < 0 {
+			return fmt.Errorf("config: group %s offer %q: click cap must not be negative", g.ID, o.ID)
+		}
+		if o.CapURL != "" {
+			if err := offerURL(o.CapURL); err != nil {
+				return fmt.Errorf("config: group %s offer %q: cap redirect: %w", g.ID, o.ID, err)
+			}
 		}
 		if o.Fallback == o.ID && o.ID != "" {
 			return fmt.Errorf("config: group %s offer %q: fallback must be another offer", g.ID, o.ID)
