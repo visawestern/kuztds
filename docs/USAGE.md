@@ -206,7 +206,9 @@ where it was and updates behind it. Sections:
    a list of alternatives (`/amazon|google|ovh/i`) is shown and edited as words
    and saved as the same kind of expression, flags included. An expression the
    engine could not compile is flagged while it is typed and marked on the
-   canvas. An empty list means no condition.
+   canvas. An empty list means no condition. **Conditions must** switches the
+   whole set between AND (all hold) and OR (any one holds); the impression
+   limit is always enforced, even in OR mode.
 2. **Then** — the type (six common ones as cards, all of them in the list) and
    the output with the macro list. Several outputs are rows: **Add a variant**,
    and a choice appears of which one a visit gets (at random, in turn per

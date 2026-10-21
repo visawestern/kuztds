@@ -65,6 +65,11 @@ eq(altRegex(['example.com','a|b','c+d','(x)'],''), '/example\\.com|a\\|b|c\\+d|\
 [[['amazon','google'],'i'], [['example.com','foo.org'],''], [['a|b','c+d','[x]','^y$','1.5*2?'],'i']]
   .forEach(([w, f]) => eq(altWords(altRegex(w, f)), {words:w, flags:f}, 'round trip ' + w.join(' ')));
 
+// AND/OR hint in the When section.
+eq(matchHint(0,false), 'no conditions — matches every visitor', 'empty rules match all');
+eq(matchHint(2,false), 'all of these hold', 'AND hint');
+eq(matchHint(2,true), 'any one of these holds', 'OR hint');
+
 // How a stored condition is shown.
 eq(listForm({flag:2,values:['ru','us'],raw:'ru,us'},false), {form:'words',words:['ru','us'],flags:'',raw:''}, 'values');
 eq(listForm({flag:2,values:[],raw:'ru|ua'},false), {form:'words',words:['ru','ua'],flags:'',raw:''}, 'an old raw list with pipes');

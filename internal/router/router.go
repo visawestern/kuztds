@@ -100,53 +100,62 @@ func matches(s *config.Stream, v Visitor, deps Deps) bool { return Why(s, v, dep
 // Why names the first filter of the stream that rejects the visitor, or
 // returns "" when the stream matches. The names are the rule keys of the
 // config ("country", "ua_text", "device", …), so the admin panel can point at
-// the condition that stopped a visitor.
+// the condition that stopped a visitor. With Rules.Any the conditions are ORed:
+// one passing condition admits the visitor, and a rejection names the first
+// configured condition.
 //
 // The limit is checked last and only through deps.Limiter, which consumes the
 // counter: pass a nil Limiter to ask "would it match" without spending it.
 func Why(s *config.Stream, v Visitor, deps Deps) string {
 	r := &s.Rules
+	type check struct {
+		name string
+		ok   bool
+	}
+	conds := make([]check, 0, 24)
+	add := func(name string, ok bool) { conds = append(conds, check{name, ok}) }
+	active := func(f config.ListFilter) bool { return f.Flag != config.FlagOff }
 
 	// lang/country — contains semantics).
 	// raw, or the joined values (the config may set only values).
 	langRaw := orJoin(r.Lang.Raw, r.Lang.Values)
-	if rejectList(r.Lang.Flag, langRaw != "", wantsEmpty(r.Lang.Values) && emptyish(v.Lang) || containsCI(langRaw, v.Lang)) {
-		return "lang"
+	if active(r.Lang) && langRaw != "" {
+		add("lang", !rejectList(r.Lang.Flag, true, wantsEmpty(r.Lang.Values) && emptyish(v.Lang) || containsCI(langRaw, v.Lang)))
 	}
 	countryRaw := orJoin(r.Country.Raw, r.Country.Values)
-	if rejectList(r.Country.Flag, countryRaw != "", wantsEmpty(r.Country.Values) && emptyish(v.Country) || containsCI(countryRaw, v.Country)) {
-		return "country"
+	if active(r.Country) && countryRaw != "" {
+		add("country", !rejectList(r.Country.Flag, true, wantsEmpty(r.Country.Values) && emptyish(v.Country) || containsCI(countryRaw, v.Country)))
 	}
 	// city/region — element-wise exact match.
-	if rejectList(r.City.Flag, len(r.City.Values) > 0, exactAny(r.City.Values, v.City)) {
-		return "city"
+	if active(r.City) && len(r.City.Values) > 0 {
+		add("city", !rejectList(r.City.Flag, true, exactAny(r.City.Values, v.City)))
 	}
-	if rejectList(r.Region.Flag, len(r.Region.Values) > 0, exactAny(r.Region.Values, v.Region)) {
-		return "region"
+	if active(r.Region) && len(r.Region.Values) > 0 {
+		add("region", !rejectList(r.Region.Flag, true, exactAny(r.Region.Values, v.Region)))
 	}
 	// ua/referer/key — /regex/ or substring; domain — /regex/ or exact.
-	if rejectList(r.UAText.Flag, cfgd(r.UAText), textOrRegex(r.UAText, v.UA)) {
-		return "ua_text"
+	if active(r.UAText) && cfgd(r.UAText) {
+		add("ua_text", !rejectList(r.UAText.Flag, true, textOrRegex(r.UAText, v.UA)))
 	}
-	if rejectList(r.Referer.Flag, cfgd(r.Referer), textOrRegex(r.Referer, v.Referer)) {
-		return "referer_text"
+	if active(r.Referer) && cfgd(r.Referer) {
+		add("referer_text", !rejectList(r.Referer.Flag, true, textOrRegex(r.Referer, v.Referer)))
 	}
-	if rejectList(r.Key.Flag, cfgd(r.Key), textOrRegex(r.Key, v.Key)) {
-		return "key_text"
+	if active(r.Key) && cfgd(r.Key) {
+		add("key_text", !rejectList(r.Key.Flag, true, textOrRegex(r.Key, v.Key)))
 	}
-	if rejectList(r.Domain.Flag, cfgd(r.Domain), exactOrRegex(r.Domain, v.Domain)) {
-		return "domain_text"
+	if active(r.Domain) && cfgd(r.Domain) {
+		add("domain_text", !rejectList(r.Domain.Flag, true, exactOrRegex(r.Domain, v.Domain)))
 	}
 
 	// OS/browser — substring over "name version"; brand — exact match.
-	if rejectList(r.OS.Flag, len(r.OS.Values) > 0, substrAny(r.OS.Values, joinVer(v.OS, v.OSVersion))) {
-		return "os"
+	if active(r.OS) && len(r.OS.Values) > 0 {
+		add("os", !rejectList(r.OS.Flag, true, substrAny(r.OS.Values, joinVer(v.OS, v.OSVersion))))
 	}
-	if rejectList(r.Browser.Flag, len(r.Browser.Values) > 0, substrAny(r.Browser.Values, joinVer(v.Browser, v.BrowserVer))) {
-		return "browser"
+	if active(r.Browser) && len(r.Browser.Values) > 0 {
+		add("browser", !rejectList(r.Browser.Flag, true, substrAny(r.Browser.Values, joinVer(v.Browser, v.BrowserVer))))
 	}
-	if rejectList(r.Brand.Flag, len(r.Brand.Values) > 0, exactAny(r.Brand.Values, v.Brand)) {
-		return "brand"
+	if active(r.Brand) && len(r.Brand.Values) > 0 {
+		add("brand", !rejectList(r.Brand.Flag, true, exactAny(r.Brand.Values, v.Brand)))
 	}
 
 	// Schedule by days of the week.
@@ -155,102 +164,107 @@ func Why(s *config.Stream, v Visitor, deps Deps) string {
 		if deps.Now != nil {
 			now = deps.Now()
 		}
-		if !r.Schedule.Days[int(now.Weekday())] {
-			return "schedule"
-		}
+		add("schedule", r.Schedule.Days[int(now.Weekday())])
 	}
 
-	// Devices: FlagA(0) blocks the given type.
-	if r.Computer == config.FlagA && v.Device == "computer" {
-		return "device"
-	}
-	if r.Phone == config.FlagA && v.Device == "phone" {
-		return "device"
-	}
-	if r.Tablet == config.FlagA && v.Device == "tablet" {
-		return "device"
+	// Devices: FlagA blocks the given type.
+	if r.Computer == config.FlagA || r.Phone == config.FlagA || r.Tablet == config.FlagA {
+		blocked := r.Computer == config.FlagA && v.Device == "computer" ||
+			r.Phone == config.FlagA && v.Device == "phone" ||
+			r.Tablet == config.FlagA && v.Device == "tablet"
+		add("device", !blocked)
 	}
 
-	// Operators: FlagA(0) blocks a specific operator; FlagB(1) — whitelist:
+	// Operators: FlagA blocks a specific operator; FlagB is a whitelist:
 	// if at least one FlagB operator is set, the visitor must belong to one
 	// of them (an empty operator is not in the list).
 	requireSet := map[string]bool{}
+	blocked, opsOn := false, false
 	for op, fl := range r.Operators {
 		switch fl {
 		case config.FlagA:
+			opsOn = true
 			if v.Operator == op {
-				return "operators"
+				blocked = true
 			}
 		case config.FlagB:
+			opsOn = true
 			requireSet[op] = true
 		}
 	}
-	if len(requireSet) > 0 && (emptyish(v.Operator) || !requireSet[v.Operator]) {
-		return "operators"
+	if opsOn {
+		allowed := !blocked && (len(requireSet) == 0 || (!emptyish(v.Operator) && requireSet[v.Operator]))
+		add("operators", allowed)
 	}
 
 	// Uniqueness.
 	switch r.Unique {
 	case config.FlagA: // unique only
-		if !v.Unique {
-			return "unique"
-		}
+		add("unique", v.Unique)
 	case config.FlagB: // non-unique only
-		if v.Unique {
-			return "unique"
-		}
+		add("unique", !v.Unique)
 	}
 
 	// Yandex.Browser.
 	switch r.YaBrowser {
 	case config.FlagA: // exclude Yandex.Browser
-		if matchYaBrowser(v.UA) {
-			return "yabrowser"
-		}
+		add("yabrowser", !matchYaBrowser(v.UA))
 	case config.FlagB: // Yandex.Browser only
-		if !matchYaBrowser(v.UA) {
-			return "yabrowser"
-		}
+		add("yabrowser", matchYaBrowser(v.UA))
 	}
 
 	// Presence of a referer.
 	switch r.HasReferer {
 	case config.FlagA: // require a referer
-		if emptyish(v.Referer) {
-			return "has_referer"
-		}
+		add("has_referer", !emptyish(v.Referer))
 	case config.FlagB: // require absence of a referer
-		if !emptyish(v.Referer) {
-			return "has_referer"
-		}
+		add("has_referer", emptyish(v.Referer))
 	}
 
 	// IP list (via ipindex). File name without the .dat extension.
 	if r.IPList.Flag != config.FlagOff && r.IPList.File != "" && deps.IP != nil && v.IP.IsValid() {
 		_, in := deps.IP.Lookup(strings.TrimSuffix(r.IPList.File, ".dat"), v.IP)
-		if rejectList(r.IPList.Flag, true, in) {
-			return "ip_list"
-		}
+		add("ip_list", !rejectList(r.IPList.Flag, true, in))
 	}
 
 	// Network: ASN by number ("15169" or "AS15169"), organization by /regex/
 	// or substring.
-	if rejectList(r.ASN.Flag, len(r.ASN.Values) > 0, asnAny(r.ASN.Values, v.ASN)) {
-		return "asn"
+	if active(r.ASN) && len(r.ASN.Values) > 0 {
+		add("asn", !rejectList(r.ASN.Flag, true, asnAny(r.ASN.Values, v.ASN)))
 	}
-	if rejectList(r.Org.Flag, cfgd(r.Org), wantsEmpty(r.Org.Values) && emptyish(v.Org) || !emptyish(v.Org) && textOrRegex(r.Org, v.Org)) {
-		return "org"
+	if active(r.Org) && cfgd(r.Org) {
+		add("org", !rejectList(r.Org.Flag, true, wantsEmpty(r.Org.Values) && emptyish(v.Org) || !emptyish(v.Org) && textOrRegex(r.Org, v.Org)))
 	}
 	// Time zone: a UTC offset ("+3", "+5:30") or an IANA name ("Europe/Moscow").
-	if rejectList(r.Timezone.Flag, len(r.Timezone.Values) > 0, tzAny(r.Timezone.Values, v.Timezone, v.TZOffset)) {
-		return "timezone"
+	if active(r.Timezone) && len(r.Timezone.Values) > 0 {
+		add("timezone", !rejectList(r.Timezone.Flag, true, tzAny(r.Timezone.Values, v.Timezone, v.TZOffset)))
 	}
 	// Query-string variable: "name" (present and non-empty) or "name=value".
-	if rejectList(r.Query.Flag, len(r.Query.Values) > 0, queryAny(r.Query.Values, v.Query)) {
-		return "get"
+	if active(r.Query) && len(r.Query.Values) > 0 {
+		add("get", !rejectList(r.Query.Flag, true, queryAny(r.Query.Values, v.Query)))
 	}
 
-	// Limits (Redis in phase 4).
+	if r.Any {
+		matched := len(conds) == 0
+		for _, c := range conds {
+			if c.ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return conds[0].name
+		}
+	} else {
+		for _, c := range conds {
+			if !c.ok {
+				return c.name
+			}
+		}
+	}
+
+	// Limits (Redis in phase 4). A limit is not a condition: OR must not
+	// bypass it, so it is checked only after the conditions let the visitor in.
 	if r.Limit.Enabled && deps.Limiter != nil {
 		if !deps.Limiter.Allowed(s.Name, r.Limit) {
 			return "limit"

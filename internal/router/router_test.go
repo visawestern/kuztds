@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"net/netip"
 	"net/url"
 	"testing"
@@ -351,5 +352,51 @@ func TestSelect_QueryEmptyMetaWord(t *testing.T) {
 	}
 	if _, ok := Select(g, Visitor{Query: url.Values{"utm_source": {"fb"}}}, Deps{}); ok {
 		t.Fatal("name=@empty must not match a filled parameter")
+	}
+}
+
+func TestSelect_AnyCondition(t *testing.T) {
+	r := config.Rules{
+		Any:     true,
+		Lang:    list(config.FlagB, "en", "en"),
+		Country: list(config.FlagB, "us", "us"),
+	}
+	v := baseVisitor() // ru / ru
+	v.Lang, v.Country = "en", "ru"
+	if _, ok := Select(&config.Group{Streams: []config.Stream{stream("s", r)}}, v, Deps{}); !ok {
+		t.Fatal("any: one matching condition must be enough")
+	}
+	v.Lang, v.Country = "de", "ru"
+	if _, ok := Select(&config.Group{Streams: []config.Stream{stream("s", r)}}, v, Deps{}); ok {
+		t.Fatal("any: no matching condition must reject")
+	}
+	// An empty rule set still means "every visitor", in either mode.
+	r = config.Rules{Any: true}
+	if _, ok := Select(&config.Group{Streams: []config.Stream{stream("s", r)}}, v, Deps{}); !ok {
+		t.Fatal("any with no conditions must match everyone")
+	}
+}
+
+func TestSelect_AnyStillHonoursLimit(t *testing.T) {
+	r := config.Rules{Any: true, Country: list(config.FlagB, "ru", "ru"), Limit: config.LimitRule{Enabled: true, Type: 1, Count: 1}}
+	if _, ok := Select(&config.Group{Streams: []config.Stream{stream("s", r)}}, baseVisitor(), Deps{Limiter: denyLimiter{}}); ok {
+		t.Fatal("any must not bypass the impression limit")
+	}
+}
+
+func TestRulesAnyJSON(t *testing.T) {
+	var r config.Rules
+	if err := json.Unmarshal([]byte(`{"any":true,"country":{"flag":2,"values":["de"]}}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Any || r.Country.Flag != config.FlagB || len(r.Country.Values) != 1 {
+		t.Fatalf("any round trip: %+v", r)
+	}
+	var plain config.Rules
+	if err := json.Unmarshal([]byte(`{"country":{"flag":2,"values":["de"]}}`), &plain); err != nil {
+		t.Fatal(err)
+	}
+	if plain.Any {
+		t.Fatal("omitted any must stay AND")
 	}
 }

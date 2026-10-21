@@ -1008,6 +1008,8 @@ function statusKind(status){
   if(['rejected','trash'].includes(s))return 'warn';
   return '';
 }
+// What the When section promises: AND by default, OR when rules.any is set.
+const matchHint=(n,any)=>n?(any?'any one of these holds':'all of these hold'):'no conditions — matches every visitor';
 // ---- pure: end ----
 
 const TYPES={
@@ -1480,7 +1482,7 @@ function openStream(i,focus){
   q('#s_del',el).onclick=()=>deleteStream(EDIT);
   // Every edit goes straight into the model; the canvas behind catches up.
   let t=0;
-  const onEdit=()=>{collectStream();SIM=null;markDirty();clearTimeout(t);t=setTimeout(()=>{if(EDIT>=0&&q('#canvas'))renderFlow()},180)};
+  const onEdit=(e)=>{collectStream();SIM=null;markDirty();if(e&&e.target&&e.target.id==='s_match')paintStream();clearTimeout(t);t=setTimeout(()=>{if(EDIT>=0&&q('#canvas'))renderFlow()},180)};
   el.addEventListener('input',onEdit); el.addEventListener('change',onEdit);
   paintStream();
   renderFlow();
@@ -1498,7 +1500,9 @@ function paintStream(){
   const hitK=SIM&&SIM.path[0].streams[EDIT]&&SIM.path[0].streams[EDIT].why;
   body.innerHTML=`
     <div class="sec" id="sec-when">
-      <div class="st"><span class="n">1</span>When<span class="hint" style="font-weight:400">${shown.length?'all of these hold':'no conditions — matches every visitor'}</span></div>
+      <div class="st"><span class="n">1</span>When<span class="hint" style="font-weight:400">${matchHint(shown.length,!!r.any)}</span></div>
+      <div class="fld"><label>Conditions must</label>${sel('s_match',opt('all','all hold (AND)',r.any?'any':'all')+opt('any','any one holds (OR)',r.any?'any':'all'))}
+        <div class="hint">OR is useful for alternative audiences, e.g. Germany or Austria, phone or tablet. The impression limit still applies.</div></div>
       <div class="fld"><label>Role in the flow</label>${sel('s_type',opt('regular','regular — tried in list order',s.type||'regular')+opt('forced','forced — tried before every regular stream',s.type)+opt('default','default — catches visits nothing else matched',s.type))}
         <div class="hint">Forced streams are checked first, whatever their position. The single default stream ignores its own conditions and serves the rest.</div></div>
       <div id="conds">${shown.map(c=>condRow(c,r,hitK===c.k)).join('')}</div>
@@ -1748,7 +1752,7 @@ function collectStream(){
   s.out={redirect:red,out:red==='group'?(v('s_group')?val('s_group'):(prev.redirect==='group'?prev.out:'')):red==='offer'?(v('s_outv')?readVariants(v('s_outv')):(prev.redirect==='offer'?prev.out:'')):(v('s_outv')?readVariants(v('s_outv')):(prev.redirect==='group'||prev.redirect==='offer'?'':prev.out||'')),
     chance:+val('s_chance')||0,distribution:v('s_dist')?val('s_dist'):(prev.distribution||'random'),header:val('s_header')};
   s.separation={enabled:on('sep_en'),file:val('sep_file').trim()};
-  const r={};
+  const r={any:val('s_match')==='any'};
   COND.filter(c=>c.kind==='list').forEach(c=>{r[c.k]=has(c.k)?readLF(c):{flag:0,values:[],raw:''}});
   r.ip_list=has('ip_list')&&val('f_iplist_file').trim()?{flag:+val('f_iplist_f'),file:val('f_iplist_file').trim()}:{flag:0,file:''};
   if(has('device')){r.computer=on('d_computer')?0:1;r.phone=on('d_phone')?0:1;r.tablet=on('d_tablet')?0:1}

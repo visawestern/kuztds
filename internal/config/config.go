@@ -606,6 +606,9 @@ type LimitRule struct {
 
 // Rules is the full set of stream filtering predicates.
 type Rules struct {
+	// Any switches the conditions from AND (default) to OR: one passing
+	// condition admits the visitor. Limits are never part of the OR.
+	Any     bool       `json:"any,omitempty"`
 	Lang    ListFilter `json:"lang"`    // contains semantics
 	Country ListFilter `json:"country"` // contains semantics
 	City    ListFilter `json:"city"`    // element-wise exact match
