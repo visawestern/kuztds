@@ -134,15 +134,15 @@ func TestCHRoundTrip(t *testing.T) {
 	}
 
 	// Postback for cid_a.
-	if err := ch.RecordPostback(ctx, "cid_a", 2.5, "sale", "", 3.0); err != nil {
+	if err := ch.RecordPostback(ctx, "cid_a", 2.5, "sale", "", "", 3.0); err != nil {
 		t.Fatalf("RecordPostback: %v", err)
 	}
 	// Trash postback for cid_b: excluded from Revenue, kept in Revenue (trash).
-	if err := ch.RecordPostback(ctx, "cid_b", 10.0, "trash", "t-9", 0); err != nil {
+	if err := ch.RecordPostback(ctx, "cid_b", 10.0, "trash", "t-9", "", 0); err != nil {
 		t.Fatalf("RecordPostback trash: %v", err)
 	}
 	// nonexistent cid → error.
-	if err := ch.RecordPostback(ctx, "nope_cid", 1.0, "sale", "", 0); err == nil {
+	if err := ch.RecordPostback(ctx, "nope_cid", 1.0, "sale", "", "", 0); err == nil {
 		t.Error("RecordPostback for an unknown cid must return an error")
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -236,4 +236,35 @@ func containsKey(kv []KV, key string) bool {
 		}
 	}
 	return false
+}
+
+func TestCHPostbackErrors(t *testing.T) {
+	ch := chFromEnv(t)
+	defer ch.Close()
+	ctx := context.Background()
+	reason := fmt.Sprintf("itest_%d", os.Getpid())
+	now := time.Now()
+	t.Cleanup(func() { _ = ch.conn.Exec(ctx, "ALTER TABLE postback_errors DELETE WHERE reason = ?", reason) })
+	want := PostbackError{TS: now, Reason: reason, CID: "cid_e", Status: "nope",
+		TID: "42", IP: "8.8.8.8", Query: "cid=cid_e&status=nope", Detail: "invalid status"}
+	if err := ch.InsertPostbackErrors(ctx, []PostbackError{want}); err != nil {
+		t.Fatalf("InsertPostbackErrors: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	rows, err := ch.PostbackErrors(ctx, now.Add(-time.Minute), now.Add(time.Minute), 10)
+	if err != nil {
+		t.Fatalf("PostbackErrors: %v", err)
+	}
+	found := false
+	for _, x := range rows {
+		if x.Reason == reason {
+			found = true
+			if x.CID != want.CID || x.Status != want.Status || x.TID != want.TID || x.IP != want.IP {
+				t.Errorf("row = %+v", x)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("journal row %q not found in %d rows", reason, len(rows))
+	}
 }

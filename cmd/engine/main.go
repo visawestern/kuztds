@@ -169,6 +169,7 @@ func main() {
 	// ClickHouse logs (phase 4): asynchronous batch writes. Optional.
 	var logs *logbuf.Buffer
 	var chConn *store.CH
+	var pbErr *pbErrorLog
 	if a := os.Getenv("KUZTDS_CLICKHOUSE_ADDR"); a != "" {
 		ch, err := store.OpenCH(a, getenv("KUZTDS_CLICKHOUSE_DB", "kuztds"),
 			getenv("KUZTDS_CLICKHOUSE_USER", "kuztds"), os.Getenv("KUZTDS_CLICKHOUSE_PASSWORD"))
@@ -178,6 +179,8 @@ func main() {
 			chConn = ch
 			logs = logbuf.New(ch, 10000, 1000, time.Second, log)
 			go logs.Run(ctx)
+			pbErr = newPBErrorLog(ch, log, 50, 2*time.Second)
+			go pbErr.Run()
 			log.Info("clickhouse connected", "addr", a)
 		}
 	}
@@ -191,7 +194,7 @@ func main() {
 
 	d := &engineDeps{
 		log: log, lists: lists, sigs: sigs, seps: seps, geores: geores, counters: counters,
-		groups: groups, logs: logs, chConn: chConn, rates: rates, verifs: verifs, notFound: notFound, fetcher: fetcher,
+		groups: groups, logs: logs, chConn: chConn, rates: rates, verifs: verifs, notFound: notFound, pbErrors: pbErr, fetcher: fetcher,
 		dataDir: dataDir, keysDir: keysDir, postbackKey: postbackKey, apiKey: apiKey,
 		trashMode: trashMode, trashURL: trashURL, curlCacheMin: curlCacheMin,
 	}
@@ -204,6 +207,9 @@ func main() {
 			l := logs.Losses()
 			w.Header().Set("X-Events-Lost", strconv.FormatInt(l.Total(), 10))
 			w.Header().Set("X-Events-Lost-Detail", fmt.Sprintf("full=%d queue=%d insert=%d late=%d", l.Full, l.Queue, l.Insert, l.Late))
+		}
+		if pbErr != nil {
+			w.Header().Set("X-Postback-Errors-Dropped", strconv.FormatInt(pbErr.Dropped(), 10))
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -248,6 +254,11 @@ func main() {
 		// for the case where Close gave up with work still in flight.
 		lctx, lcancel := context.WithTimeout(context.Background(), shutdownPhase)
 		defer lcancel()
+		if pbErr != nil {
+			if err := pbErr.Close(lctx); err != nil {
+				log.Warn("postback journal: final flush did not finish", "err", err)
+			}
+		}
 		if err := logs.Close(lctx); err != nil {
 			log.Warn("logbuf: final flush did not finish within the shutdown deadline", "err", err)
 		}

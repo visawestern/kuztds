@@ -129,7 +129,10 @@ the uniqueness cookie the client sets, `ztu` by default).
   Statuses: `lead`, `sale`, `rejected`, `registration`, `deposit`, `trash`,
   plus your own `[a-z0-9_]{1,32}`. Only `trash` moves the amount from Revenue
   to Revenue (trash); every status is kept in the conversion log. A postback
-  without a valid status is ignored (HTTP 200).
+  without a valid status is ignored (HTTP 200). Rejections are journaled for
+  90 days — no click id, no/unknown status, unknown click id, or a storage
+  failure — and shown under Conversions → **Rejected postbacks** with a CSV
+  export. The journal strips the `pb` key from the stored query.
 - Any query-string variable can be a stream condition ("URL parameter":
   `utm_source=fb`, or just `sub1` for "present").
 
@@ -161,7 +164,9 @@ flow; breakdowns by country / device / OS / browser / source / network),
 loaded from the data of the period via `GET /api/logs/filters`; IP field;
 humans/bots; CSV; a row opens the visit's detail — routing, location, network,
 User-Agent, referer), **Conversions** (filter by flow and status — system
-statuses are labelled, custom ones appear as “Custom · name”; CSV export),
+statuses are labelled, custom ones appear as “Custom · name”; CSV export;
+below the table, **Rejected postbacks** explains why a postback was not
+recorded and exports the same journal as CSV),
 **Keywords**, **Lists** (`.dat` editor),
 **Tools** (below), **Automation** (below), **Settings**.
 

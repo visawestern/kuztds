@@ -102,6 +102,24 @@ func (c *CH) ensureSchema(ctx context.Context) {
 			c.postbackOfferCols = n == 1
 		}
 	}
+	// G-066: rejected postbacks live in their own table. Creating it here as
+	// well as in the migration keeps an existing database working after an
+	// upgrade, the same way the ALTERs above do.
+	_ = c.conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS postback_errors
+	(
+		ts     DateTime DEFAULT now(),
+		reason LowCardinality(String),
+		cid    String,
+		status LowCardinality(String),
+		tid    String,
+		ip     String,
+		query  String,
+		detail String
+	)
+	ENGINE = MergeTree
+	PARTITION BY toYYYYMMDD(ts)
+	ORDER BY ts
+	TTL ts + INTERVAL 90 DAY`)
 }
 
 // PostbackColumns reports whether postbacks carry status/tid.
@@ -809,4 +827,59 @@ func (c *CH) InsertEvents(ctx context.Context, events []logbuf.Event) error {
 		}
 	}
 	return batch.Send()
+}
+
+// PostbackError — a rejected incoming postback (G-066): why it was not
+// written, what arrived, and where it came from. Query never contains the
+// postback key.
+type PostbackError struct {
+	TS     time.Time
+	Reason string
+	CID    string
+	Status string
+	TID    string
+	IP     string
+	Query  string
+	Detail string
+}
+
+// InsertPostbackErrors appends rejected postbacks to the journal. The rows are
+// diagnostic only: a failure here must never affect the visitor's 200.
+func (c *CH) InsertPostbackErrors(ctx context.Context, rows []PostbackError) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	batch, err := c.conn.PrepareBatch(ctx, `INSERT INTO postback_errors
+		(ts, reason, cid, status, tid, ip, query, detail)`)
+	if err != nil {
+		return err
+	}
+	for _, x := range rows {
+		if err := batch.Append(x.TS, x.Reason, x.CID, x.Status, x.TID, x.IP, x.Query, x.Detail); err != nil {
+			return err
+		}
+	}
+	return batch.Send()
+}
+
+// PostbackErrors returns the most recent rejected postbacks in the period.
+func (c *CH) PostbackErrors(ctx context.Context, from, to time.Time, limit int) ([]PostbackError, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := c.conn.Query(ctx, `SELECT ts, reason, cid, status, tid, ip, query, detail
+		FROM postback_errors WHERE ts >= ? AND ts < ? ORDER BY ts DESC LIMIT ?`, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]PostbackError, 0, limit)
+	for rows.Next() {
+		var x PostbackError
+		if err := rows.Scan(&x.TS, &x.Reason, &x.CID, &x.Status, &x.TID, &x.IP, &x.Query, &x.Detail); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
 }

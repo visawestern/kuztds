@@ -65,6 +65,11 @@ eq(altRegex(['example.com','a|b','c+d','(x)'],''), '/example\\.com|a\\|b|c\\+d|\
 [[['amazon','google'],'i'], [['example.com','foo.org'],''], [['a|b','c+d','[x]','^y$','1.5*2?'],'i']]
   .forEach(([w, f]) => eq(altWords(altRegex(w, f)), {words:w, flags:f}, 'round trip ' + w.join(' ')));
 
+// Rejected-postback reasons.
+eq(pbReasonLabel('status_invalid'), 'Unknown status', 'known reason');
+eq(pbReasonLabel(''), '—', 'empty reason');
+eq(pbReasonLabel('custom_reason'), 'custom_reason', 'unknown reason stays visible');
+
 // AND/OR hint in the When section.
 eq(matchHint(0,false), 'no conditions — matches every visitor', 'empty rules match all');
 eq(matchHint(2,false), 'all of these hold', 'AND hint');

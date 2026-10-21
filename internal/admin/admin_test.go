@@ -38,6 +38,12 @@ func (fakeStats) Postbacks(context.Context, time.Time, time.Time, string, string
 func (fakeStats) PostbackStatuses(context.Context, time.Time, time.Time, string) ([]store.KV, error) {
 	return []store.KV{{Key: "sale", Count: 1}}, nil
 }
+func (fakeStats) PostbackErrors(context.Context, time.Time, time.Time, int) ([]store.PostbackError, error) {
+	return []store.PostbackError{{
+		TS: time.Now(), Reason: "status_invalid", CID: "abc", Status: "nope", TID: "42",
+		IP: "8.8.8.8", Query: "cid=abc&status=nope", Detail: "invalid status",
+	}}, nil
+}
 func (fakeStats) DeleteGroupLogs(context.Context, string) error { return nil }
 
 type fakeGroups struct{ saved []config.Group }

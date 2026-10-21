@@ -718,3 +718,31 @@ func TestConversionStatusesAndExport(t *testing.T) {
 		t.Errorf("export body = %q", body)
 	}
 }
+
+func TestPostbackErrorsAPI(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, _ := authedClient(t, srv.URL)
+	resp, err := c.Get(srv.URL + "/api/postback-errors?limit=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "status_invalid") {
+		t.Fatalf("journal → %d %s", resp.StatusCode, body)
+	}
+	resp, err = c.Get(srv.URL + "/api/postback-errors/export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/csv") {
+		t.Fatalf("export Content-Type = %q", got)
+	}
+	for _, want := range []string{"reason", "status_invalid", "cid", "8.8.8.8"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("export missing %q: %s", want, body)
+		}
+	}
+}

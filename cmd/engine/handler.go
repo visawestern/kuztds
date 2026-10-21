@@ -43,6 +43,7 @@ type engineDeps struct {
 	fetcher      *fetch.Client
 	verifs       *verificationStore
 	notFound     *notFoundStore
+	pbErrors     postbackJournal
 	dataDir      string
 	keysDir      string
 	postbackKey  string
@@ -137,44 +138,49 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 	// Без валидного status= конверсия игнорируется (паритет Keitaro 11),
 	// ответ всё равно 200.
 	if pb := r.URL.Query().Get("pb"); pb != "" {
-		if d.postbackKey != "" && pb == d.postbackKey && d.chConn != nil {
-			if pbd, ok := parsePostback(r.URL.Query()); ok {
-				// Conversion cost by the entry campaign's model (G-120) and the
-				// offer payout when the postback carries no amount (G-049).
-				// Best effort: pricing must never block the conversion itself.
-				profit := pbd.Profit
-				convCost := 0.0
-				offer := ""
-				if gid, gerr := d.chConn.EventGroupID(r.Context(), pbd.CID); gerr == nil && d.groups != nil {
-					if grp, found := d.groups.Get(gid); found {
-						if offID, oerr := d.chConn.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
-							offer = offID
-							if p, priced := effectiveProfit(pbd.Profit, pbd.HasProfit, *grp, offID, d.rates.Rates()); priced {
-								profit = p
-							} else {
-								d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
-							}
-							// G-050: a purchase spends one slot of the offer's day.
-							// trash is a reversal, not a purchase.
-							if pbd.Status != "trash" && d.counters != nil {
-								if cerr := d.counters.CountConversion(r.Context(), gid, offID, time.Now()); cerr != nil {
-									d.log.Debug("engine: offer cap not counted", "offer", offID, "err", cerr)
+		if d.postbackKey != "" && pb == d.postbackKey {
+			q := r.URL.Query()
+			if pbd, ok := parsePostback(q); ok {
+				if d.chConn != nil {
+					// Conversion cost by the entry campaign's model (G-120) and the
+					// offer payout when the postback carries no amount (G-049).
+					// Best effort: pricing must never block the conversion itself.
+					profit := pbd.Profit
+					convCost := 0.0
+					offer := ""
+					if gid, gerr := d.chConn.EventGroupID(r.Context(), pbd.CID); gerr == nil && d.groups != nil {
+						if grp, found := d.groups.Get(gid); found {
+							if offID, oerr := d.chConn.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
+								offer = offID
+								if p, priced := effectiveProfit(pbd.Profit, pbd.HasProfit, *grp, offID, d.rates.Rates()); priced {
+									profit = p
+								} else {
+									d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
+								}
+								// G-050: a purchase spends one slot of the offer's day.
+								// trash is a reversal, not a purchase.
+								if pbd.Status != "trash" && d.counters != nil {
+									if cerr := d.counters.CountConversion(r.Context(), gid, offID, time.Now()); cerr != nil {
+										d.log.Debug("engine: offer cap not counted", "offer", offID, "err", cerr)
+									}
 								}
 							}
-						}
-						m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
-						if cc, ok := cost.ForConversionStatusUSD(m, pbd.Status, profit, d.rates.Rates()); ok {
-							convCost = cc
-						} else {
-							d.log.Debug("engine: conversion cost skipped (no rates for currency)", "currency", grp.Cost.Currency)
+							m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
+							if cc, ok := cost.ForConversionStatusUSD(m, pbd.Status, profit, d.rates.Rates()); ok {
+								convCost = cc
+							} else {
+								d.log.Debug("engine: conversion cost skipped (no rates for currency)", "currency", grp.Cost.Currency)
+							}
 						}
 					}
-				}
-				if err := d.chConn.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost); err != nil {
-					d.log.Warn("postback failed", "cid", pbd.CID, "status", pbd.Status, "err", err)
+					if err := d.chConn.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost); err != nil {
+						d.log.Warn("postback failed", "cid", pbd.CID, "status", pbd.Status, "err", err)
+						d.journalPostback(r, "not_recorded", err.Error())
+					}
 				}
 			} else {
 				d.log.Warn("postback ignored", "query", r.URL.RawQuery)
+				d.journalPostback(r, postbackRejectReason(q), "")
 			}
 		}
 		w.WriteHeader(http.StatusOK)

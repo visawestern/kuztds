@@ -1008,6 +1008,12 @@ function statusKind(status){
   if(['rejected','trash'].includes(s))return 'warn';
   return '';
 }
+// Why a postback was rejected (G-066). The engine sends stable reason keys.
+const PB_REASONS={cid_missing:'No click ID',status_missing:'No status',status_invalid:'Unknown status',not_recorded:'Click not found or storage error'};
+function pbReasonLabel(reason){
+  const s=String(reason||'').trim();
+  return PB_REASONS[s]||(s||'—');
+}
 // What the When section promises: AND by default, OR when rules.any is set.
 const matchHint=(n,any)=>n?(any?'any one of these holds':'all of these hold'):'no conditions — matches every visitor';
 // ---- pure: end ----
@@ -2114,15 +2120,18 @@ async function conversions(_,live){
   view().innerHTML=`<div class="ph"><h1>Conversions</h1><span class="sub">${periodLabel()}</span><div class="spacer"></div><span id="pb-total" class="muted"></span></div>
     <div class="toolbar"><select id="pb-group"><option value="">All flows</option></select>
       <select id="pb-status"><option value="">All statuses</option></select>
-      <button id="pb-export">Export CSV</button></div><div id="pb-wrap">${stateHTML('Loading…')}</div>`;
+      <button id="pb-export">Export CSV</button></div><div id="pb-wrap">${stateHTML('Loading…')}</div>
+    <div class="toolbar" style="margin-top:18px"><h2 style="margin:0;font-size:15px">Rejected postbacks</h2><span id="pbe-total" class="muted"></span><div class="spacer"></div><button id="pbe-export">Export CSV</button></div><div id="pbe-wrap">${stateHTML('Loading…')}</div>`;
   q('#pb-group').onchange=()=>{loadPbStatuses();loadPostbacks()};
   q('#pb-status').onchange=loadPostbacks;
   q('#pb-export').onclick=()=>{
     const g=q('#pb-group').value, st=q('#pb-status').value;
     window.open('/api/postbacks/export?'+rangeQS()+(g?'&group='+encodeURIComponent(g):'')+(st?'&status='+encodeURIComponent(st):''),'_blank');
   };
+  q('#pbe-export').onclick=()=>window.open('/api/postback-errors/export?'+rangeQS(),'_blank');
   loadPbStatuses();
   loadPostbacks();
+  loadPostbackErrors();
   // Postbacks carry the flow's display name — that is what the engine writes with a conversion.
   const gs=await ensureGroups().catch(()=>[]);
   const s=q('#pb-group'); if(!s||!live())return;
@@ -2145,6 +2154,17 @@ async function loadPostbacks(){
   if(!r.rows.length){wrap.innerHTML=`<div class="card">${stateHTML('No conversions match these filters')}</div>`;return}
   wrap.innerHTML=`<div class="tw"><table><thead><tr><th>Time</th><th>Flow</th><th>Stream</th><th>Offer</th><th>Status</th><th>Source</th><th>Device</th><th>Country</th><th>City</th><th class="num">Profit</th><th class="num">Cost</th><th>Click ID</th><th>Txn</th></tr></thead><tbody>${
     r.rows.map(x=>`<tr><td>${when(x.ts)}</td><td>${esc(x.group)}</td><td>${esc(x.stream)}</td><td class="mono">${dash(x.offer)?esc(x.offer):'—'}</td><td>${x.status?`<span class="pill ${statusKind(x.status)}">${esc(statusLabel(x.status))}</span>`:'—'}</td><td class="ell">${esc(x.domain)}</td><td>${esc(x.device)}</td><td><span class="flag">${flag(x.country)}</span>${esc(x.country)}</td><td>${esc(x.city)}</td><td class="num ok">${money(x.profit)}</td><td class="num">${x.cost?money(x.cost):'—'}</td><td class="mono">${esc(x.cid)}</td><td class="mono">${esc(x.tid||'')}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+async function loadPostbackErrors(){
+  const r=await get('/api/postback-errors?'+rangeQS()+'&limit=100',null);
+  const wrap=q('#pbe-wrap'); if(!wrap)return;
+  if(!r||!r.rows){wrap.innerHTML=stateHTML('The rejection journal is not available — is ClickHouse connected?','err');return}
+  const rows=r.rows;
+  q('#pbe-total').textContent=rows.length?fmt(rows.length)+' shown':'';
+  if(!rows.length){wrap.innerHTML=`<div class="card">${stateHTML('No rejected postbacks in this period')}</div>`;return}
+  wrap.innerHTML=`<div class="tw"><table><thead><tr><th>Time</th><th>Why</th><th>Status</th><th>Click ID</th><th>Txn</th><th>IP</th><th>Query</th><th>Detail</th></tr></thead><tbody>${
+    rows.map(x=>`<tr><td>${when(x.ts)}</td><td><span class="pill warn">${esc(pbReasonLabel(x.reason))}</span></td><td class="mono">${esc(x.status||'—')}</td><td class="mono">${esc(x.cid||'—')}</td><td class="mono">${esc(x.tid||'')}</td><td class="mono">${esc(x.ip||'')}</td><td class="ell mono" title="${esc(x.query)}">${esc(x.query)}</td><td class="ell" title="${esc(x.detail)}">${esc(x.detail||'')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 /* ---------- KEYWORDS ---------- */

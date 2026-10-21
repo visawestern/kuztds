@@ -40,6 +40,7 @@ type StatsProvider interface {
 	Logs(ctx context.Context, f store.LogFilter) ([]store.LogRow, int64, error)
 	Postbacks(ctx context.Context, from, to time.Time, group, status string, limit int) ([]store.PostbackRow, float64, float64, error)
 	PostbackStatuses(ctx context.Context, from, to time.Time, group string) ([]store.KV, error)
+	PostbackErrors(ctx context.Context, from, to time.Time, limit int) ([]store.PostbackError, error)
 	DeleteGroupLogs(ctx context.Context, group string) error
 }
 
@@ -264,6 +265,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/postbacks", s.auth(http.HandlerFunc(s.handlePostbacks)))
 	mux.Handle("GET /api/postbacks/statuses", s.auth(http.HandlerFunc(s.handlePostbackStatuses)))
 	mux.Handle("GET /api/postbacks/export", s.auth(http.HandlerFunc(s.handlePostbacksExport)))
+	mux.Handle("GET /api/postback-errors", s.auth(http.HandlerFunc(s.handlePostbackErrors)))
+	mux.Handle("GET /api/postback-errors/export", s.auth(http.HandlerFunc(s.handlePostbackErrorsExport)))
 	mux.Handle("GET /api/keys", s.auth(http.HandlerFunc(s.handleKeys)))
 
 	mux.Handle("GET /api/groups", s.auth(http.HandlerFunc(s.handleGroupsGet)))
@@ -866,6 +869,55 @@ func (s *Server) handlePostbacksExport(w http.ResponseWriter, r *http.Request) {
 		rec := []string{x.TS.Format(time.RFC3339), x.Group, x.Stream, x.Offer, x.Status, x.Domain, x.Page,
 			x.Device, x.Country, x.City, strconv.FormatFloat(x.Profit, 'f', 2, 64),
 			strconv.FormatFloat(x.Cost, 'f', 2, 64), x.CID, x.TID}
+		for i := range rec {
+			rec[i] = csvSafe(rec[i])
+		}
+		_ = cw.Write(rec)
+	}
+	cw.Flush()
+}
+
+func (s *Server) handlePostbackErrors(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Stats == nil {
+		writeErr(w, http.StatusServiceUnavailable, "stats unavailable")
+		return
+	}
+	from, to := parseRange(r)
+	limit := atoiDef(r.URL.Query().Get("limit"), 100)
+	if limit < 1 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	rows, err := s.cfg.Stats.PostbackErrors(r.Context(), from, to, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "postback errors unavailable")
+		return
+	}
+	if rows == nil {
+		rows = []store.PostbackError{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
+}
+
+func (s *Server) handlePostbackErrorsExport(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Stats == nil {
+		writeErr(w, http.StatusServiceUnavailable, "stats unavailable")
+		return
+	}
+	from, to := parseRange(r)
+	rows, err := s.cfg.Stats.PostbackErrors(r.Context(), from, to, 5000)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "postback errors unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=postback-errors.csv")
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"ts", "reason", "cid", "status", "tid", "ip", "query", "detail"})
+	for _, x := range rows {
+		rec := []string{x.TS.Format(time.RFC3339), x.Reason, x.CID, x.Status, x.TID, x.IP, x.Query, x.Detail}
 		for i := range rec {
 			rec[i] = csvSafe(rec[i])
 		}
