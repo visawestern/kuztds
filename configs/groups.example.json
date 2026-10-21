@@ -321,6 +321,12 @@
             "seconds": 0
           }
         },
+        "url_replace": [
+          {
+            "find": "/a",
+            "repl": "/a?utm_source=flow"
+          }
+        ],
         "out": {
           "redirect": "http_redirect",
           "out": "https://example.com/a|||https://example.com/b",

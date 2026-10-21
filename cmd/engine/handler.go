@@ -96,6 +96,17 @@ func separationFiles(groups *config.Groups) []string {
 	return out
 }
 
+// urlOutput reports whether the output of this redirect type is a URL the
+// stream may edit (G-130). Text, raw JS, offers and group hops are not.
+func urlOutput(redirect string) bool {
+	switch redirect {
+	case "http_redirect", "meta_refresh", "js_redirect", "iframe_redirect",
+		"js_selection", "iframe_selection", "curl":
+		return true
+	}
+	return false
+}
+
 // hitPercent reports whether a p-percent chance fires: p <= 0 never, p >= 100
 // always, and exactly p times in 100 in between.
 //
@@ -409,6 +420,9 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 	if selStream != nil {
 		dist = selStream.Out.Distribution
 	}
+	// G-130: remember whether the flow serves a URL before offers rewrite the
+	// redirect type; replacements must not touch an offer's own URL.
+	urlEditable := urlOutput(redirect)
 
 	// offer: a stream (or a group default) of type "offer" sends the visitor to
 	// a campaign offer (G-048). The URL then goes through the normal macro and
@@ -507,6 +521,11 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 	out := render.Expand(outRaw, md)
 	if wantRemote {
 		out = strings.ReplaceAll(out, "[REMOTE]", remoteVal)
+	}
+	if urlEditable && selStream != nil {
+		for _, e := range selStream.URLReplace {
+			out = replaceCI(out, e.Find, e.Replace)
+		}
 	}
 
 	// api_mac: mac code in the api response with probability Prob %.

@@ -710,3 +710,30 @@ func TestE2E_StreamTypes(t *testing.T) {
 	wantStream(t, rec, "catch")
 	wantBody(t, rec, "DEFAULT")
 }
+
+// G-130: replacements run on the flow's URL after macros and only for URL
+// outputs — not for text, offers or a group link.
+func TestE2E_URLReplacement(t *testing.T) {
+	gg := config.NewGroups(&config.Group{ID: "g", Status: true, Redirect: "stop", Streams: []config.Stream{
+		{Name: "url", Status: true, Out: config.Output{Redirect: "http_redirect",
+			Out: "https://t.example/?cid=[KEY]&slot=OLD"},
+			URLReplace: []config.URLEdit{{Find: "OLD", Replace: "NEW"}, {Find: "[KEY]", Replace: "X"}}},
+		{Name: "text", Status: true, Out: config.Output{Redirect: "show_text", Out: "OLD [KEY]"},
+			URLReplace: []config.URLEdit{{Find: "OLD", Replace: "NEW"}}},
+	}})
+	h := newEng(t, gg, engHarness{})
+	rec := do(t, h, "/g?q=abc", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "cid=abc") || !strings.Contains(loc, "slot=NEW") || strings.Contains(loc, "cid=X") {
+		t.Errorf("Location = %q, want slot replaced, cid left as the expanded key", loc)
+	}
+	// The text stream has to be picked explicitly; both streams match, so use a
+	// second group to prove that show_text is not a URL.
+	gg = config.NewGroups(&config.Group{ID: "t", Status: true, Redirect: "stop", Streams: []config.Stream{
+		{Name: "text", Status: true, Out: config.Output{Redirect: "show_text", Out: "OLD [KEY]"},
+			URLReplace: []config.URLEdit{{Find: "OLD", Replace: "NEW"}}},
+	}})
+	h = newEng(t, gg, engHarness{})
+	rec = do(t, h, "/t?q=abc", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	wantBody(t, rec, "OLD abc")
+}

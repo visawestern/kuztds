@@ -488,6 +488,7 @@ func TestGroupsSaveRejectsBadStreams(t *testing.T) {
 		`[{"id":"x","streams":[{"name":"s","type":"fallback"}]}]`,
 		`[{"id":"x","streams":[{"name":"s","type":"Forced"}]}]`,
 		`[{"id":"x","streams":[{"name":"a","type":"default"},{"name":"b","type":"default"}]}]`,
+		`[{"id":"x","streams":[{"name":"s","url_replace":[{"find":"","repl":"new"}]}]}]`,
 	} {
 		if code := put(payload); code != http.StatusBadRequest {
 			t.Errorf("bad stream %s → 400, got %d", payload, code)

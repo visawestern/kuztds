@@ -1683,6 +1683,7 @@ function rewriteField(id,text){
 }
 const rwRow=(f,r)=>`<div class="rwrow"><input class="mono rw-f" value="${esc(f)}" placeholder="find" spellcheck="false"><span>→</span><input class="mono rw-r" value="${esc(r)}" placeholder="replace with" spellcheck="false"><button type="button" class="icon sm ghost" data-delrw title="Remove">${icon('x')}</button></div>`;
 const readRewrite=(box)=>joinRewrite(qa('.rwrow',box).map(r=>({find:q('.rw-f',r).value,repl:q('.rw-r',r).value})));
+const readURLReplace=(box)=>qa('.rwrow',box).map(r=>({find:q('.rw-f',r).value,repl:q('.rw-r',r).value})).filter(x=>x.find.trim()!=='');
 function bindRewrite(root){
   const del=(b)=>b.onclick=()=>{const box=b.closest('.rws');b.closest('.rwrow').remove();changed(box)};
   qa('[data-delrw]',root).forEach(del);
@@ -1710,6 +1711,7 @@ function collectStream(){
   s.name=val('s_name').trim();
   s.status=on('s_status');
   s.type=val('s_type')||'regular';
+  const urw=q('#s_urlrw',d); s.url_replace=urw?readURLReplace(urw):(s.url_replace||[]);
   s.comment=val('s_comment').trim();
   const red=val('s_redirect'), prev=s.out||{};
   // A field that is not on screen (the type does not use it) keeps its value.

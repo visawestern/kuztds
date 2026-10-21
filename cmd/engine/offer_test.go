@@ -252,3 +252,15 @@ func TestOfferListRotationKeepsCountryRules(t *testing.T) {
 		t.Errorf("US visitor on the first offer → %q, want the country fallback", got)
 	}
 }
+
+// G-130: an offer is a partner's URL; the flow's replacement must not rewrite it.
+func TestOfferURLNotRewritten(t *testing.T) {
+	g := offerGroups(config.Offer{ID: "o1", Status: true, URL: "https://net.example/?slot=KEEP"}, true)
+	g.List()[0].Streams[0].URLReplace = []config.URLEdit{{Find: "KEEP", Replace: "CHANGED"}}
+	h, _, stop := curlEnv(t, g, "0")
+	rec := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	stop()
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "slot=KEEP") {
+		t.Errorf("offer Location = %q, want the offer URL untouched", loc)
+	}
+}

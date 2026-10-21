@@ -435,7 +435,10 @@ type Stream struct {
 	// Type decides when the stream is tried (G-127): "forced" before regular
 	// streams, "default" only when no regular stream matched, ""/"regular" in
 	// list order. The default stream's own conditions are not consulted.
-	Type       string     `json:"type,omitempty"`
+	Type string `json:"type,omitempty"`
+	// URLReplace edits the flow's own URL after macros (G-130). It never
+	// touches an offer or landing URL.
+	URLReplace []URLEdit  `json:"url_replace,omitempty"`
 	Comment    string     `json:"comment"` // operator's note, not used by the engine
 	Rules      Rules      `json:"rules"`
 	Out        Output     `json:"out"`
@@ -469,8 +472,19 @@ func (g Group) ValidateStreams() error {
 		default:
 			return fmt.Errorf("config: group %s stream %q: type %q must be forced, regular or default", g.ID, s.Name, s.Type)
 		}
+		for j, e := range s.URLReplace {
+			if strings.TrimSpace(e.Find) == "" {
+				return fmt.Errorf("config: group %s stream %q: URL replacement %d has nothing to find", g.ID, s.Name, j+1)
+			}
+		}
 	}
 	return nil
+}
+
+// URLEdit is one find → replace pair for the flow URL (G-130).
+type URLEdit struct {
+	Find    string `json:"find"`
+	Replace string `json:"repl"`
 }
 
 // Remote fetches external content into [REMOTE] (with caching and regex parsing).
