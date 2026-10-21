@@ -430,8 +430,12 @@ func (g Group) Offer(id string) (Offer, bool) {
 // The rules are factored out into Rules as data — the router runs them in a loop
 // (declarative rules executed by the router in a loop).
 type Stream struct {
-	Name       string     `json:"name"`
-	Status     bool       `json:"status"`
+	Name   string `json:"name"`
+	Status bool   `json:"status"`
+	// Type decides when the stream is tried (G-127): "forced" before regular
+	// streams, "default" only when no regular stream matched, ""/"regular" in
+	// list order. The default stream's own conditions are not consulted.
+	Type       string     `json:"type,omitempty"`
 	Comment    string     `json:"comment"` // operator's note, not used by the engine
 	Rules      Rules      `json:"rules"`
 	Out        Output     `json:"out"`
@@ -441,6 +445,32 @@ type Stream struct {
 	BotCurl    string     `json:"b_curl"`  // find/replace for CURL to bots
 	Remote     Remote     `json:"remote"`  // [REMOTE] fetch
 	APIMac     APIMac     `json:"api_mac"` // mac code in the API response
+}
+
+// Stream roles (G-127).
+const (
+	StreamRegular = "regular"
+	StreamForced  = "forced"
+	StreamDefault = "default"
+)
+
+// ValidateStreams checks the roles; an empty type means a regular stream, so
+// old configs stay valid.
+func (g Group) ValidateStreams() error {
+	defaults := 0
+	for i, s := range g.Streams {
+		switch s.Type {
+		case "", StreamRegular, StreamForced:
+		case StreamDefault:
+			defaults++
+			if defaults > 1 {
+				return fmt.Errorf("config: group %s: only one default stream is allowed (stream %d)", g.ID, i+1)
+			}
+		default:
+			return fmt.Errorf("config: group %s stream %q: type %q must be forced, regular or default", g.ID, s.Name, s.Type)
+		}
+	}
+	return nil
 }
 
 // Remote fetches external content into [REMOTE] (with caching and regex parsing).

@@ -129,6 +129,13 @@ func simGroups() []config.Group {
 			{Name: "repeat", Status: true, Rules: config.Rules{Unique: config.FlagB}, Out: config.Output{Redirect: "show_text", Out: "AGAIN"}},
 		}},
 		{ID: "broken", Status: true, Redirect: "group", Out: "nowhere"},
+		{ID: "typed", Status: true, Redirect: "show_text", Out: "BASE", Streams: []config.Stream{
+			{Name: "regular", Status: true, Rules: config.Rules{Query: inc("utm_source=fb")},
+				Out: config.Output{Redirect: "show_text", Out: "REG"}},
+			{Name: "forced", Status: true, Type: "forced", Rules: config.Rules{Query: inc("force=1")},
+				Out: config.Output{Redirect: "show_text", Out: "FORCED"}},
+			{Name: "catch", Status: true, Type: "default", Out: config.Output{Redirect: "show_text", Out: "DEFAULT"}},
+		}},
 	}
 }
 
@@ -194,6 +201,17 @@ func TestSimulate(t *testing.T) {
 	r = run("promo", "1.128.0.1", uaDesktop, "", true)
 	if r.Path[1].Selected != "repeat" {
 		t.Errorf("link, returning visitor: %+v", r.Path[1])
+	}
+
+	// G-127: the simulation picks the forced stream first and falls back to the
+	// default, not to "whatever matched first in the list".
+	r = run("typed", "8.8.8.8", uaDesktop, "?force=1&utm_source=fb", false)
+	if r.Path[0].Selected != "forced" {
+		t.Errorf("forced in simulation: %+v", r.Path[0])
+	}
+	r = run("typed", "8.8.8.8", uaDesktop, "", false)
+	if r.Path[0].Selected != "catch" || r.Path[0].Out != "DEFAULT" {
+		t.Errorf("default in simulation: %+v", r.Path[0])
 	}
 
 	// A link to nowhere is reported, not followed.

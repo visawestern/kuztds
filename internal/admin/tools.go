@@ -236,19 +236,30 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	var path []simStep
 	for hop := 0; ; hop++ {
 		step := simStep{Group: grp.ID, Selected: "-", Redirect: grp.Redirect, Out: grp.Out, Streams: []simStream{}}
+		// The choice itself goes through the engine's router, so forced/default
+		// streams (G-127) are explained the same way they are served.
+		chosen, _ := router.Select(grp, v, deps)
+		if chosen != nil {
+			step.Selected = chosen.Name
+			if chosen.Out.Redirect != "" {
+				step.Redirect, step.Out = chosen.Out.Redirect, chosen.Out.Out
+			}
+		}
 		for i := range grp.Streams {
 			st := &grp.Streams[i]
 			ss := simStream{Name: st.Name, On: st.Status}
 			// Streams after the winner are still evaluated: "would this one
-			// have matched too" is what explains a surprising order.
+			// have matched too" is what explains a surprising order. The
+			// default stream ignores its conditions, so it is never "rejected".
 			if st.Status {
-				ss.Why = router.Why(st, v, deps)
-				ss.Match = ss.Why == ""
-				if ss.Match && step.Selected == "-" {
-					step.Selected = st.Name
-					if st.Out.Redirect != "" {
-						step.Redirect, step.Out = st.Out.Redirect, st.Out.Out
+				if st.Type == config.StreamDefault {
+					ss.Match = chosen == st
+					if !ss.Match {
+						ss.Why = "default"
 					}
+				} else {
+					ss.Why = router.Why(st, v, deps)
+					ss.Match = ss.Why == ""
 				}
 			}
 			step.Streams = append(step.Streams, ss)

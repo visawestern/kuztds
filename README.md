@@ -88,6 +88,8 @@ not like a script.**
 ## Features
 
 **Traffic segmentation (per stream):**
+- Roles: a `forced` stream is tried before every regular one, one `default`
+  stream catches whatever no regular stream matched, the rest go in list order.
 - Geo: country / city / region / **time zone** (MaxMind-format `.mmdb`, or the
   CDN's `CF-IPCountry` for the country).
 - Network: **ASN** and **organization** (from an ASN `.mmdb`) — e.g. keep

@@ -1208,7 +1208,8 @@ function renderFlow(){
     const sp=perfOf(g,s.name), o=s.out||{}, bt=s.bots||{}, r=step&&step.streams[i];
     let verdict='', hit='';
     if(r&&r.on){
-      if(r.match)verdict=step.selected===s.name&&step.streams.findIndex(x=>x.on&&x.match)===i?`<span class="verdict y">${icon('check')}matched</span>`:'<span class="verdict m">would match</span>';
+      if(step.selected===s.name&&s.status)verdict=`<span class="verdict y">${icon('check')}matched${s.type==='forced'?' · forced':s.type==='default'?' · default':''}</span>`;
+      else if(r.match)verdict='<span class="verdict m">would match</span>';
       else{hit=r.why;verdict=`<span class="verdict n">${icon('x')}${esc((condOf(r.why)||{l:r.why}).l)}</span>`}
     }
     const nv=variantsOf(o.out), isLink=o.redirect==='group';
@@ -1471,6 +1472,8 @@ function paintStream(){
   body.innerHTML=`
     <div class="sec" id="sec-when">
       <div class="st"><span class="n">1</span>When<span class="hint" style="font-weight:400">${shown.length?'all of these hold':'no conditions — matches every visitor'}</span></div>
+      <div class="fld"><label>Role in the flow</label>${sel('s_type',opt('regular','regular — tried in list order',s.type||'regular')+opt('forced','forced — tried before every regular stream',s.type)+opt('default','default — catches visits nothing else matched',s.type))}
+        <div class="hint">Forced streams are checked first, whatever their position. The single default stream ignores its own conditions and serves the rest.</div></div>
       <div id="conds">${shown.map(c=>condRow(c,r,hitK===c.k)).join('')}</div>
       <button id="addcond">${icon('plus')}Add condition</button>
     </div>
@@ -1706,6 +1709,7 @@ function collectStream(){
   const v=id=>q('#'+id,d), has=k=>!!q(`.crow[data-cond="${k}"]`,d), val=id=>{const e=v(id);return e?e.value:''}, on=id=>{const e=v(id);return !!(e&&e.checked)};
   s.name=val('s_name').trim();
   s.status=on('s_status');
+  s.type=val('s_type')||'regular';
   s.comment=val('s_comment').trim();
   const red=val('s_redirect'), prev=s.out||{};
   // A field that is not on screen (the type does not use it) keeps its value.

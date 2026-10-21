@@ -472,3 +472,28 @@ func TestMePostbackKey(t *testing.T) {
 		r.Body.Close()
 	}
 }
+
+// G-127: the admin refuses stream roles it cannot run, and a second default.
+func TestGroupsSaveRejectsBadStreams(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	for _, payload := range []string{
+		`[{"id":"x","streams":[{"name":"s","type":"fallback"}]}]`,
+		`[{"id":"x","streams":[{"name":"s","type":"Forced"}]}]`,
+		`[{"id":"x","streams":[{"name":"a","type":"default"},{"name":"b","type":"default"}]}]`,
+	} {
+		if code := put(payload); code != http.StatusBadRequest {
+			t.Errorf("bad stream %s → 400, got %d", payload, code)
+		}
+	}
+	if code := put(`[{"id":"x","streams":[{"name":"vip","type":"forced"},{"name":"rest","type":"default"}]}]`); code != http.StatusOK {
+		t.Errorf("valid stream types → 200, got %d", code)
+	}
+}

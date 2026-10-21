@@ -779,6 +779,10 @@ func (s *Server) handleGroupsSave(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if err := g.ValidateStreams(); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if err := s.cfg.Groups.Save(r.Context(), groups); err != nil {
 		writeErr(w, http.StatusInternalServerError, "save error")

@@ -686,3 +686,27 @@ func TestE2E_TrafficMatrix(t *testing.T) {
 		}
 	}
 }
+
+// G-127: a forced stream wins from any position, the default catches the rest.
+func TestE2E_StreamTypes(t *testing.T) {
+	gg := config.NewGroups(&config.Group{ID: "g", Status: true, Redirect: "stop", Streams: []config.Stream{
+		{Name: "regular", Type: "regular", Status: true,
+			Rules: config.Rules{Query: config.ListFilter{Flag: config.FlagB, Values: []string{"utm_source=fb"}}},
+			Out:   config.Output{Redirect: "show_text", Out: "REG"}},
+		{Name: "forced", Type: "forced", Status: true,
+			Rules: config.Rules{Query: config.ListFilter{Flag: config.FlagB, Values: []string{"force=1"}}},
+			Out:   config.Output{Redirect: "show_text", Out: "FORCED"}},
+		{Name: "catch", Type: "default", Status: true,
+			Rules: config.Rules{Key: config.ListFilter{Flag: config.FlagB, Values: []string{"never"}}},
+			Out:   config.Output{Redirect: "show_text", Out: "DEFAULT"}},
+	}})
+	h := newEng(t, gg, engHarness{})
+	rec := do(t, h, "/g?force=1&utm_source=fb", "8.8.8.8", nil)
+	wantStream(t, rec, "forced")
+	wantBody(t, rec, "FORCED")
+	rec = do(t, h, "/g?utm_source=fb", "8.8.8.8", nil)
+	wantStream(t, rec, "regular")
+	rec = do(t, h, "/g", "8.8.8.8", nil)
+	wantStream(t, rec, "catch")
+	wantBody(t, rec, "DEFAULT")
+}

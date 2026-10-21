@@ -257,3 +257,51 @@ func TestSelect_NoStreamMatches(t *testing.T) {
 		t.Errorf("no stream must match, got %v", s)
 	}
 }
+
+// G-127: forced streams are tried before regular ones, whatever their position.
+func TestSelect_ForcedBeatsEarlierRegular(t *testing.T) {
+	g := &config.Group{Streams: []config.Stream{
+		{Name: "regular", Status: true, Type: "regular"},
+		{Name: "forced", Status: true, Type: "forced",
+			Rules: config.Rules{Key: config.ListFilter{Flag: config.FlagB, Values: []string{"force=1"}, Raw: "force=1"}}},
+	}}
+	if s, ok := Select(g, Visitor{Key: "force=1"}, Deps{}); !ok || s.Name != "forced" {
+		t.Fatalf("forced match = %v, want forced", s)
+	}
+	if s, ok := Select(g, Visitor{}, Deps{}); !ok || s.Name != "regular" {
+		t.Fatalf("plain visitor = %v, want regular", s)
+	}
+}
+
+// G-127: the default stream catches what no regular stream matched, and its
+// own conditions do not decide that.
+func TestSelect_DefaultCatchesUnmatched(t *testing.T) {
+	g := &config.Group{Streams: []config.Stream{
+		{Name: "regular", Status: true,
+			Rules: config.Rules{Key: config.ListFilter{Flag: config.FlagB, Values: []string{"x"}, Raw: "x"}}},
+		{Name: "catch", Status: true, Type: "default",
+			Rules: config.Rules{Key: config.ListFilter{Flag: config.FlagB, Values: []string{"never"}, Raw: "never"}}},
+	}}
+	if s, ok := Select(g, Visitor{Key: "x"}, Deps{}); !ok || s.Name != "regular" {
+		t.Fatalf("matching regular = %v, want regular", s)
+	}
+	if s, ok := Select(g, Visitor{}, Deps{}); !ok || s.Name != "catch" {
+		t.Fatalf("fallback = %v, want the default stream despite its rules", s)
+	}
+}
+
+// G-127: a disabled forced/default stream takes no part in the choice.
+func TestSelect_DisabledTypesIgnored(t *testing.T) {
+	g := &config.Group{Streams: []config.Stream{
+		{Name: "forced_off", Status: false, Type: "forced"},
+		{Name: "catch_off", Status: false, Type: "default"},
+		{Name: "regular", Status: true},
+	}}
+	if s, ok := Select(g, Visitor{}, Deps{}); !ok || s.Name != "regular" {
+		t.Fatalf("selection = %v, want regular", s)
+	}
+	g.Streams[2].Status = false
+	if s, ok := Select(g, Visitor{}, Deps{}); ok {
+		t.Fatalf("with everything off got %q, want no stream", s.Name)
+	}
+}

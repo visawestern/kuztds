@@ -70,12 +70,24 @@ func Select(g *config.Group, v Visitor, deps Deps) (*config.Stream, bool) {
 	if g == nil {
 		return nil, false
 	}
+	// G-127: forced streams are tried first, whatever their place in the list;
+	// then regular streams in order; the default stream takes the rest without
+	// consulting its own conditions. An unknown type counts as regular so a
+	// hand-edited file still routes instead of dropping traffic.
 	for i := range g.Streams {
 		s := &g.Streams[i]
-		if !s.Status {
-			continue
+		if s.Status && s.Type == config.StreamForced && matches(s, v, deps) {
+			return s, true
 		}
-		if matches(s, v, deps) {
+	}
+	for i := range g.Streams {
+		s := &g.Streams[i]
+		if s.Status && s.Type != config.StreamForced && s.Type != config.StreamDefault && matches(s, v, deps) {
+			return s, true
+		}
+	}
+	for i := range g.Streams {
+		if s := &g.Streams[i]; s.Status && s.Type == config.StreamDefault {
 			return s, true
 		}
 	}
