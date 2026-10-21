@@ -35,6 +35,15 @@ func TestOfferValidate(t *testing.T) {
 		"url is javascript":   {Offers: []Offer{{ID: "o1", URL: "javascript:alert(1)", Status: true}}},
 		"duplicate id":        {Offers: []Offer{{ID: "o1", URL: "https://a"}, {ID: "o1", URL: "https://b"}}},
 		"id with spaces":      {Offers: []Offer{{ID: "o 1", URL: "https://a", Status: true}}},
+		"negative payout":     {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, Payout: -1}}},
+		"currency is not ISO": {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, Currency: "US$"}}},
+		"negative daily cap":  {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, CapDaily: -1}}},
+		"fallback is itself":  {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, CapDaily: 1, Fallback: "o1"}}},
+		"fallback is missing": {Offers: []Offer{{ID: "o1", URL: "https://a", Status: true, CapDaily: 1, Fallback: "o2"}}},
+		"fallback is disabled": {Offers: []Offer{
+			{ID: "o1", URL: "https://a", Status: true, CapDaily: 1, Fallback: "o2"},
+			{ID: "o2", URL: "https://b", Status: false},
+		}},
 	}
 	for name, g := range cases {
 		if err := g.ValidateOffers(); err == nil {
