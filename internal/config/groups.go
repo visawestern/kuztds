@@ -13,11 +13,13 @@ type Groups struct {
 	mu      sync.RWMutex
 	byID    map[string]*Group
 	byAlias map[string]*Group
+	byShare map[string]*Group
 }
 
-func index(list []Group) (map[string]*Group, map[string]*Group) {
+func index(list []Group) (map[string]*Group, map[string]*Group, map[string]*Group) {
 	byID := make(map[string]*Group, len(list))
 	byAlias := make(map[string]*Group)
+	byShare := make(map[string]*Group)
 	for i := range list {
 		grp := &list[i]
 		byID[grp.ID] = grp
@@ -26,8 +28,11 @@ func index(list []Group) (map[string]*Group, map[string]*Group) {
 				byAlias[a] = grp
 			}
 		}
+		if grp.Share != nil && grp.Share.Slug != "" {
+			byShare[grp.Share.Slug] = grp
+		}
 	}
-	return byID, byAlias
+	return byID, byAlias, byShare
 }
 
 // LoadGroups reads groups from a JSON file (an array of Group).
@@ -40,19 +45,22 @@ func LoadGroups(path string) (*Groups, error) {
 	if err := json.Unmarshal(b, &list); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	byID, byAlias := index(list)
-	return &Groups{byID: byID, byAlias: byAlias}, nil
+	byID, byAlias, byShare := index(list)
+	return &Groups{byID: byID, byAlias: byAlias, byShare: byShare}, nil
 }
 
 // NewGroups creates a set from a ready-made list (for tests/embedded config).
 func NewGroups(list ...*Group) *Groups {
-	g := &Groups{byID: make(map[string]*Group, len(list)), byAlias: map[string]*Group{}}
+	g := &Groups{byID: make(map[string]*Group, len(list)), byAlias: map[string]*Group{}, byShare: map[string]*Group{}}
 	for _, grp := range list {
 		g.byID[grp.ID] = grp
 		for _, a := range grp.Aliases {
 			if a != "" {
 				g.byAlias[a] = grp
 			}
+		}
+		if grp.Share != nil && grp.Share.Slug != "" {
+			g.byShare[grp.Share.Slug] = grp
 		}
 	}
 	return g
@@ -66,6 +74,14 @@ func (g *Groups) Get(id string) (*Group, bool) {
 		return grp, true
 	}
 	grp, ok := g.byAlias[id]
+	return grp, ok
+}
+
+// GetShare returns a group by its clean share link (G-059).
+func (g *Groups) GetShare(slug string) (*Group, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	grp, ok := g.byShare[slug]
 	return grp, ok
 }
 

@@ -784,6 +784,11 @@ func (s *Server) handleGroupsSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// G-059: a share slug lives in the same namespace as IDs and aliases.
+	if err := config.ValidateShares(groups); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := s.cfg.Groups.Save(r.Context(), groups); err != nil {
 		writeErr(w, http.StatusInternalServerError, "save error")
 		return

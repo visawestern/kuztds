@@ -83,8 +83,20 @@ type Group struct {
 	Source  string          `json:"source"`
 	// G-056: affiliate network templates, referenced by offers.
 	Networks []Network `json:"networks"`
+	// G-059: a clean share link with an Open Graph preview.
+	Share *Share `json:"share,omitempty"`
 
 	Streams []Stream `json:"streams"`
+}
+
+// Share is a clean share link (G-059): /<slug> renders an Open Graph card and
+// sends the browser to /<group id>. The card request is not a tracked click, so
+// crawlers building a preview do not pollute the stats.
+type Share struct {
+	Slug        string `json:"slug"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Image       string `json:"image,omitempty"`
 }
 
 // Network is an affiliate network template (G-056): the token names its

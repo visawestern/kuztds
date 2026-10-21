@@ -4,6 +4,12 @@
     "aliases": [
       "sale"
     ],
+    "share": {
+      "slug": "summer-preview",
+      "title": "Summer picks",
+      "description": "A short preview for chat apps and ad cabinets.",
+      "image": "https://cdn.example/preview.jpg"
+    },
     "name": "Promo",
     "status": true,
     "redirect": "http_redirect",

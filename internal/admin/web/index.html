@@ -978,6 +978,13 @@ function postbackMemo(base,key,networkID,networks){
   return u+'&cid='+(n.cid_token||'{subid}')+'&profit='+(n.profit_token||'{payout}')+
     '&status='+(n.status_token||'{status}')+'&tid='+(n.txn_token||'{txn}');
 }
+// A clean share link (G-059): trimmed, lower-case slug and preview text.
+function normShare(slug,title,description,image){
+  slug=String(slug||'').trim().toLowerCase();
+  if(!slug)return null;
+  return {slug,title:String(title||'').trim(),description:String(description||'').trim(),
+    image:String(image||'').trim()};
+}
 function normSources(list){
   return (list||[]).map(s=>({id:String(s.id||'').trim(),name:String(s.name||'').trim(),
     labels:(s.labels||[]).map(l=>({param:String(l.param||'').trim(),label:String(l.label||'').trim().toUpperCase()}))
@@ -1114,6 +1121,8 @@ async function saveFlows(){
   if(bad)throw new Error('Flow ID "'+bad+'" must not contain spaces, /, ? or #');
   const badA=GROUPS.flatMap(g=>g.aliases||[]).find(x=>/[\s\/?#]/.test(x));
   if(badA)throw new Error('Alias "'+badA+'" must not contain spaces, /, ? or #');
+  const badS=GROUPS.map(g=>g.share&&g.share.slug).filter(Boolean).find(x=>!/^[a-z0-9][a-z0-9_-]{1,31}$/.test(x));
+  if(badS)throw new Error('Clean link "'+badS+'" must be 2-32 characters: a-z, 0-9, - or _');
   await call('PUT','/api/groups',GROUPS);
   SAVED=JSON.stringify(GROUPS);
 }
@@ -1800,7 +1809,7 @@ const sourceCard=(s,i)=>`<div class="card pad" data-src="${i}" style="margin-bot
   <div class="row"><button type="button" class="sm ghost" data-srcdel="${i}">${icon('trash')}Remove template</button></div>
 </div>`;
 function openFlowSettings(focus){
-  const g=CUR, base=(ENGINE||'').replace(/\/$/,''), fw=g.firewall||{}, others=GROUPS.filter(x=>x!==g);
+  const g=CUR, base=(ENGINE||'').replace(/\/$/,''), fw=g.firewall||{}, sh=g.share||{}, others=GROUPS.filter(x=>x!==g);
   const hours=(g.uniq_seconds||86400)/3600;
   const paint=()=>`
     <div class="sec"><div class="st">Identity</div>
@@ -1809,6 +1818,16 @@ function openFlowSettings(focus){
         <div class="fld"><label>Name</label><input id="g_name" value="${esc(g.name||'')}" placeholder="for you, shown in reports"></div>
       </div>
       <div class="fld"><label>Aliases — other IDs that open this flow</label>${tagField('g_aliases',g.aliases||[],'another-id',{})}</div>
+    </div>
+    <div class="sec" id="sec-share"><div class="st">Clean share link — a pretty preview</div>
+      <div class="g2">
+        <div class="fld"><label>Link slug</label><input id="g_share_slug" value="${esc(sh.slug||'')}" placeholder="summer-preview" autocomplete="off">
+          <div class="hint">${base?'The link is '+esc(base)+'/':'The link is /'}${esc(sh.slug||'slug')} — 2-32 characters: a-z, 0-9, - or _.</div></div>
+        <div class="fld"><label>Preview image URL</label><input id="g_share_image" value="${esc(sh.image||'')}" placeholder="https://cdn.example/preview.jpg" autocomplete="off"></div>
+      </div>
+      <div class="fld"><label>Preview title</label><input id="g_share_title" maxlength="120" value="${esc(sh.title||'')}" placeholder="shown in the card"></div>
+      <div class="fld"><label>Preview description</label><textarea id="g_share_desc" maxlength="300" rows="2" placeholder="a line for the card">${esc(sh.description||'')}</textarea></div>
+      <div class="hint">Crawlers get an Open Graph card; the browser then jumps to the flow. Building the card is not a tracked click — the jump is what appears in the logs.</div>
     </div>
     <div class="sec" id="sec-default"><div class="st">Default — when no stream matches</div>
       <div class="g2">
@@ -1870,6 +1889,7 @@ function openFlowSettings(focus){
     <div class="sec"><div class="st">Links</div>
       <dl class="kv">
         ${[g.id,...(g.aliases||[])].filter(Boolean).map(id=>`<dt>link</dt><dd><a class="mono" href="${esc(base+'/'+id)}" target="_blank" rel="noreferrer">${esc(base+'/'+id)}</a></dd>`).join('')}
+        ${sh.slug?`<dt>clean link</dt><dd><a class="mono" href="${esc(base+'/'+sh.slug)}" target="_blank" rel="noreferrer">${esc(base+'/'+sh.slug)}</a> — preview for crawlers</dd>`:''}
         <dt>with a keyword</dt><dd><code>${esc(base+'/'+g.id+'?q=KEYWORD')}</code></dd>
         <dt>with parameters</dt><dd><code>${esc(base+'/'+g.id+'?p1=a&p2=b')}</code> → [PAR-1] [PAR-2]</dd>
         <dt>postback</dt><dd><code>${esc(base+'/?pb=KEY&cid=[CID]&profit=1.50&status=sale')}</code></dd>
@@ -1930,6 +1950,7 @@ function collectFlow(){
   const was=g.id, wasSource=g.source, wasSourceIdx=(g.sources||[]).findIndex(s=>s.id===wasSource), wasSources=(g.sources||[]).length;
   g.id=val('g_id').trim(); g.name=val('g_name').trim();
   g.aliases=v('g_aliases')?tagValues(v('g_aliases')):(g.aliases||[]);
+  g.share=normShare(val('g_share_slug'),val('g_share_title'),val('g_share_desc'),val('g_share_image'));
   const prev=g.redirect; g.redirect=val('g_redirect'); g.header=val('g_header');
   g.out=g.redirect==='group'?(v('g_group')?val('g_group'):(prev==='group'?g.out:'')):g.redirect==='offer'?(v('g_outv')?readVariants(v('g_outv')):(prev==='offer'?g.out:'')):(v('g_outv')?readVariants(v('g_outv')):(prev==='group'||prev==='offer'?'':g.out||''));
   g.geo=val('g_geo'); g.uniq_method=val('g_uniq');

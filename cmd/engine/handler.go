@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
+	"html"
 	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -224,6 +227,19 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		grp, _ = d.groups.Get(gid)
 	} else {
 		grp = demoGroup
+	}
+	if grp == nil && !apiMode && d.groups != nil {
+		path := strings.Trim(r.URL.Path, "/")
+		if !strings.Contains(path, "/") && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			if sg, ok := d.groups.GetShare(gid); ok {
+				if !sg.Status {
+					trashResult(d.trashMode, d.trashURL).Write(w)
+					return
+				}
+				serveShare(w, r, sg)
+				return
+			}
+		}
 	}
 	if grp == nil || !grp.Status {
 		trashResult(d.trashMode, d.trashURL).Write(w)
@@ -637,4 +653,49 @@ func dashEmpty(s string) string {
 		return ""
 	}
 	return s
+}
+
+// serveShare renders the clean share link (G-059): an Open Graph card for the
+// crawler that builds the preview and an immediate hand-off to the flow for the
+// browser. This request is not a visit, so it writes no click — the follow-up
+// to /<group id> goes through the usual pipeline and carries the tracking.
+func serveShare(w http.ResponseWriter, r *http.Request, g *config.Group) {
+	title := g.Share.Title
+	if title == "" {
+		title = g.Name
+	}
+	if title == "" {
+		title = g.ID
+	}
+	target := "/" + url.PathEscape(g.ID)
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	esc := html.EscapeString
+	head := `<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>` + esc(title) + `</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="` + esc(title) + `">
+`
+	if g.Share.Description != "" {
+		head += `<meta property="og:description" content="` + esc(g.Share.Description) + `">
+`
+	}
+	if g.Share.Image != "" {
+		head += `<meta property="og:image" content="` + esc(g.Share.Image) + `">
+<meta name="twitter:card" content="summary_large_image">
+`
+	}
+	head += `<meta http-equiv="refresh" content="0;url=` + esc(target) + `">
+</head><body><p><a href="` + esc(target) + `">` + esc(target) + `</a></p></body></html>
+`
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex")
+	if r.Method == http.MethodHead {
+		return
+	}
+	fmt.Fprint(w, head)
 }

@@ -116,6 +116,9 @@ go run ./cmd/cron
 ## Ссылки, которые отдаёт движок
 
 - Группа: `http://домен/<id>` (и алиасы `http://домен/<alias>`)
+- Чистая ссылка: `http://домен/<slug>` — карточка предпросмотра Open Graph,
+  которая сразу уводит браузер в группу и передаёт query-строку. Сборка
+  карточки кликом не считается; в логи попадает переход на `/<id>`
 - С ключевым словом: `http://домен/<id>?q=КЛЮЧ`
 - С доп. параметрами: `http://домен/<id>?p1=...&p2=...` → макросы `[PAR-1..5]`
 - Постбэк-пиксель: `http://домен/?pb=KEY&cid=[CID]&profit=1.50&status=sale` (`status` обязателен; необязательный `&tid=` — номер сделки)
@@ -212,7 +215,8 @@ User-Agent, реферер), **Conversions**, **Keywords**, **Lists** (реда�
 4. **Advanced** — шанс показа, переопределение Content-Type, separation,
    `[REMOTE]`, API mac. **Заметка** в конце показывается на схеме.
 
-**Настройки группы** (тоже выдвижная панель): ID, имя, алиасы (чипами); выход по
+**Настройки группы** (тоже выдвижная панель): ID, имя, алиасы (чипами), чистая
+ссылка предпросмотра (slug, заголовок, описание, картинка); выход по
 умолчанию (тип, Content-Type, вывод — из нескольких вариантов отдаётся
 случайный — или другая группа); откуда берётся страна
 (сначала заголовок CDN / сначала гео-база), уникальность (IP или cookie, окно в
@@ -261,8 +265,9 @@ test**. Секреты никогда не отправляются обратн
 Примеры: `configs/groups.example.json`, `configs/test_groups.json` (набор разных
 групп для прогона трафика). Структура: массив групп `{id, name, status, redirect,
 header, out, geo, uniq_method, uniq_seconds, firewall, save_keys, save_keys_se,
-aliases, streams[]}`; поток `{name, status, comment, rules, out{redirect,out,
-chance,distribution,header}, bots, separation, remote, api_mac, curl}`.
+aliases, share{slug,title,description,image}, streams[]}`; поток `{name, status,
+comment, rules, out{redirect,out,chance,distribution,header}, bots, separation,
+remote, api_mac, curl}`.
 
 - `id` — идентификатор и адрес `/<id>`; `name` — опциональное отображаемое имя.
 - Дефолты группы (`redirect`/`out`/`header`) применяются, если поток не задал своё.

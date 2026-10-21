@@ -168,5 +168,11 @@ eq(postbackMemo('https://tds.example/','K','sticky',[{id:'sticky',cid_token:'{su
 eq(postbackMemo('','K','',[]), '','memo needs an engine base');
 eq(postbackMemo('https://tds.example/','','',[]), '','memo needs the postback key');
 
+// Clean share links (G-059): trimmed and lower-cased; no slug means no card.
+eq(normShare(' Summer_Preview ',' Picks ','A & B',' https://cdn/p.jpg '),
+  {slug:'summer_preview',title:'Picks',description:'A & B',image:'https://cdn/p.jpg'}, 'share fields are trimmed');
+eq(normShare('', 'Title', 'Description', 'https://x'), null, 'a preview without a slug is off');
+eq(normShare('   ', '', '', ''), null, 'a blank slug is off');
+
 if (failed) { console.log(failed + ' check(s) failed'); process.exit(1); }
 `

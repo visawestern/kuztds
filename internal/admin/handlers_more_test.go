@@ -498,3 +498,31 @@ func TestGroupsSaveRejectsBadStreams(t *testing.T) {
 		t.Errorf("valid stream types → 200, got %d", code)
 	}
 }
+
+// G-059: share links share the namespace with IDs and aliases, and the image
+// must be a real absolute URL — a broken card is worse than no card.
+func TestGroupsSaveRejectsBadShare(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	for _, payload := range []string{
+		`[{"id":"promo","status":true,"share":{"slug":"promo"}}]`,
+		`[{"id":"a","share":{"slug":"promo"}},{"id":"b","share":{"slug":"promo"}}]`,
+		`[{"id":"g","share":{"slug":"promo","image":"/p.jpg"}}]`,
+		`[{"id":"g","share":{"title":"Preview"}}]`,
+		`[{"id":"g","share":{"slug":"Summer"}}]`,
+	} {
+		if code := put(payload); code != http.StatusBadRequest {
+			t.Errorf("bad share %s → 400, got %d", payload, code)
+		}
+	}
+	if code := put(`[{"id":"g","share":{"slug":"promo","title":"Preview","image":"https://cdn.example/p.jpg"}}]`); code != http.StatusOK {
+		t.Errorf("valid share → 200, got %d", code)
+	}
+}

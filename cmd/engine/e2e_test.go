@@ -775,3 +775,93 @@ func TestE2E_EmptyRefererMetaWord(t *testing.T) {
 	rec = do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome, "Referer": "https://google.com/"})
 	wantStream(t, rec, "rest")
 }
+
+// G-059: a clean link serves an Open Graph preview and sends the browser to
+// the flow itself. The preview request is not a tracked click: the crawler
+// that builds the card must not inflate the stats, while the browser's
+// follow-up to /<id> goes through the normal pipeline and is logged.
+func TestE2E_CleanShareLink(t *testing.T) {
+	gg := config.NewGroups(&config.Group{
+		ID: "g1", Status: true, Redirect: "stop",
+		Share: &config.Share{Slug: "summer", Title: "Summer <picks>",
+			Description: "A & B", Image: "https://cdn.example/p.jpg"},
+		Streams: []config.Stream{{Name: "s", Status: true,
+			Out: config.Output{Redirect: "show_text", Out: "FLOW"}}},
+	}, &config.Group{ID: "g2", Status: true, Name: "Named picks",
+		Share: &config.Share{Slug: "named"}})
+	h := newEng(t, gg, engHarness{})
+
+	rec := do(t, h, "/summer?utm_source=fb", "8.8.8.8", nil)
+	wantCode(t, rec, 200)
+	wantHdr(t, rec, "Content-Type", "text/html; charset=utf-8")
+	body := rec.Body.String()
+	for _, want := range []string{
+		`<meta property="og:title" content="Summer &lt;picks&gt;">`,
+		`<meta property="og:description" content="A &amp; B">`,
+		`<meta property="og:image" content="https://cdn.example/p.jpg">`,
+		`content="0;url=/g1?utm_source=fb"`,
+		`href="/g1?utm_source=fb"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("preview misses %q; body=%q", want, body)
+		}
+	}
+	if got := rec.Header().Get("X-Kuztds-Stream"); got != "" {
+		t.Errorf("the preview must not be routed as a visit, stream=%q", got)
+	}
+	rec = do(t, h, "/named", "8.8.8.8", nil)
+	wantBody(t, rec, `<meta property="og:title" content="Named picks">`)
+	if strings.Contains(rec.Body.String(), "og:image") {
+		t.Errorf("no image configured, but the card has one: %q", rec.Body.String())
+	}
+
+	// A card is HTML; HEAD gets the headers and no body, and a query string is
+	// escaped in the attributes.
+	rec = do(t, h, "/summer?a=1&b=2", "8.8.8.8", nil)
+	wantBody(t, rec, `content="0;url=/g1?a=1&amp;b=2"`)
+	req := httptest.NewRequest(http.MethodHead, "/summer", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	wantCode(t, rec, 200)
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD must not have a body: %q", rec.Body.String())
+	}
+
+	// The browser's follow-up is the tracked one.
+	rec = do(t, h, "/g1?utm_source=fb", "8.8.8.8", nil)
+	wantBody(t, rec, "FLOW")
+
+	// A slug is exactly one path segment; deeper paths and unknown slugs are
+	// not clean links.
+	for _, p := range []string{"/summer/extra", "/missing", "/"} {
+		rec = do(t, h, p, "8.8.8.8", nil)
+		if strings.Contains(rec.Body.String(), "og:title") {
+			t.Errorf("%s must not serve a preview: %q", p, rec.Body.String())
+		}
+	}
+
+	// A disabled flow is not advertised through a preview either.
+	gg = config.NewGroups(&config.Group{ID: "off", Status: false,
+		Share: &config.Share{Slug: "off-promo", Title: "Off"}})
+	h = newEng(t, gg, engHarness{})
+	rec = do(t, h, "/off-promo", "8.8.8.8", nil)
+	if strings.Contains(rec.Body.String(), "og:title") {
+		t.Errorf("a disabled flow must not serve a preview: %q", rec.Body.String())
+	}
+}
+
+// G-059: the preview is built from operator input, so every value is escaped.
+func TestE2E_CleanShareEscapes(t *testing.T) {
+	gg := config.NewGroups(&config.Group{ID: "g", Status: true,
+		Share: &config.Share{Slug: "promo", Title: `"><script>alert(1)</script>`,
+			Description: "d", Image: `https://x/"><script>`}})
+	h := newEng(t, gg, engHarness{})
+	rec := do(t, h, "/promo", "8.8.8.8", nil)
+	body := rec.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("preview reflects a script tag: %q", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Errorf("title is not escaped: %q", body)
+	}
+}

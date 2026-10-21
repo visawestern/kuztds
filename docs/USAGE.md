@@ -116,6 +116,9 @@ the uniqueness cookie the client sets, `ztu` by default).
 ## URLs the engine serves
 
 - Group: `http://host/<id>` (and aliases `http://host/<alias>`)
+- Clean share link: `http://host/<slug>` — an Open Graph preview card that
+  sends the browser to the group, forwarding the query string. Building the
+  card is not a tracked click; the follow-up to `/<id>` is.
 - With a keyword: `http://host/<id>?q=KEYWORD`
 - With extra params: `http://host/<id>?p1=...&p2=...` → macros `[PAR-1..5]`
 - Postback pixel: `http://host/?pb=KEY&cid=[CID]&profit=1.50&status=sale` (`status` required; optional `&tid=` transaction id)
@@ -207,7 +210,8 @@ where it was and updates behind it. Sections:
 4. **Advanced** — show chance, Content-Type override, separation, `[REMOTE]`,
    API mac code. A **note** at the end is shown on the canvas.
 
-**Flow settings** (a drawer as well): ID, name, aliases (chips); the default
+**Flow settings** (a drawer as well): ID, name, aliases (chips), a clean share
+link (slug plus preview title, description and image); the default
 (type, Content-Type, output — of several variants a random one is served — or
 another flow); where the country comes from (CDN
 header first / geo database first), uniqueness (IP or cookie, window in hours),
@@ -256,7 +260,8 @@ key is shown as `********`, and saving it unchanged keeps the stored value.
 Examples: `configs/groups.example.json`, `configs/test_groups.json` (a set of
 different groups for traffic runs). Structure: an array of groups `{id, name,
 status, redirect, header, out, geo, uniq_method, uniq_seconds, firewall,
-save_keys, save_keys_se, aliases, streams[]}`; a stream `{name, status, comment,
+save_keys, save_keys_se, aliases, share{slug,title,description,image}, streams[]}`;
+a stream `{name, status, comment,
 rules, out{redirect,out,chance,distribution,header}, bots, separation, remote,
 api_mac, curl}`.
 
