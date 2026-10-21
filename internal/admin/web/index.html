@@ -1462,7 +1462,8 @@ function paintStream(){
         ?`<div class="fld"><label>Send the visitor to flow</label>${others.length?sel('s_group','<option value="">— choose a flow —</option>'+others.map(x=>opt(x.id,x.id+(x.name?' — '+x.name:''),(o.out||'').trim())).join('')):'<div class="hint">There is no other flow yet. Create one first.</div>'}
             <div class="hint">Its streams are tried with the same visitor; the log shows the flow that finally served them.</div></div>`
         :red==='offer'
-          ?`<div class="fld"><label>Offer</label>${(g.offers||[]).filter(x=>x.id).length?sel('s_offer','<option value="">— choose an offer —</option>'+(g.offers||[]).filter(x=>x.id).map(x=>opt(x.id,x.id+(x.name?' — '+x.name:'')+(x.status?'':' (disabled)'),(o.out||'').trim())).join('')):'<div class="hint">This flow has no offers yet. Add one in Flow settings → Offers.</div>'}
+          ?`<div class="fld"><label>Offers — one per variant, the flow distribution picks</label>${variantsField('s_outv',o.out,false,'o1|||backup','s_distw')}
+            <div class="hint">${(g.offers||[]).filter(x=>x.id).length?'Known offers: '+esc((g.offers||[]).filter(x=>x.id).map(x=>x.id+(x.status?'':' (disabled)')).join(', '))+'. Unknown and disabled ids are skipped; without a servable id the visit goes to the trash.':'This flow has no offers yet. Add one in Flow settings → Offers.'}</div></div>
               <div class="hint">The offer link is served for each visit and gets the same macros as a redirect.</div></div>`
         :NOOUT.has(red)?`<div class="hint">A fixed answer — there is nothing to fill in.</div>`
         :`<div class="fld"><label>${outLabel(red)}</label>${variantsField('s_outv',o.out,!URLISH.has(red),outPH(red),'s_distw')}
@@ -1688,7 +1689,7 @@ function collectStream(){
   s.comment=val('s_comment').trim();
   const red=val('s_redirect'), prev=s.out||{};
   // A field that is not on screen (the type does not use it) keeps its value.
-  s.out={redirect:red,out:red==='group'?(v('s_group')?val('s_group'):(prev.redirect==='group'?prev.out:'')):red==='offer'?(v('s_offer')?val('s_offer'):(prev.redirect==='offer'?prev.out:'')):(v('s_outv')?readVariants(v('s_outv')):(prev.redirect==='group'||prev.redirect==='offer'?'':prev.out||'')),
+  s.out={redirect:red,out:red==='group'?(v('s_group')?val('s_group'):(prev.redirect==='group'?prev.out:'')):red==='offer'?(v('s_outv')?readVariants(v('s_outv')):(prev.redirect==='offer'?prev.out:'')):(v('s_outv')?readVariants(v('s_outv')):(prev.redirect==='group'||prev.redirect==='offer'?'':prev.out||'')),
     chance:+val('s_chance')||0,distribution:v('s_dist')?val('s_dist'):(prev.distribution||'random'),header:val('s_header')};
   s.separation={enabled:on('sep_en'),file:val('sep_file').trim()};
   const r={};
@@ -1759,7 +1760,8 @@ function openFlowSettings(focus){
       ${g.redirect==='group'
         ?`<div class="fld"><label>Send the visitor to flow</label>${sel('g_group','<option value="">— choose a flow —</option>'+others.map(x=>opt(x.id,x.id+(x.name?' — '+x.name:''),(g.out||'').trim())).join(''))}</div>`
         :g.redirect==='offer'
-        ?`<div class="fld"><label>Offer</label>${(g.offers||[]).filter(x=>x.id).length?sel('g_offer','<option value="">— choose an offer —</option>'+(g.offers||[]).filter(x=>x.id).map(x=>opt(x.id,x.id+(x.name?' — '+x.name:'')+(x.status?'':' (disabled)'),(g.out||'').trim())).join('')):'<div class="hint">Add an offer below first.</div>'}</div>`
+        ?`<div class="fld"><label>Offers — one per variant, picked at random</label>${variantsField('g_outv',g.out,false,'o1|||backup')}
+          <div class="hint">${(g.offers||[]).filter(x=>x.id).length?'Known offers: '+esc((g.offers||[]).filter(x=>x.id).map(x=>x.id+(x.status?'':' (disabled)')).join(', '))+'. Unknown and disabled ids are skipped.':'Add an offer below first.'}</div></div>`
         :NOOUT.has(g.redirect||'stop')?`<div class="hint">A fixed answer — there is nothing to fill in.</div>`
         :`<div class="fld"><label>${outLabel(g.redirect)}</label>${variantsField('g_outv',g.out,!URLISH.has(g.redirect),outPH(g.redirect))}<div class="hint">With several variants, a random one is served.</div></div>`}
     </div>
@@ -1794,7 +1796,7 @@ function openFlowSettings(focus){
       <div class="hint">CPC/CPV charge per visit, CPM per thousand, CPA on conversion, Revshare takes % of the payout. Empty model = free traffic. Non-USD needs rate sync (pending).</div>
     </div>
     <div class="sec" id="sec-offers"><div class="st">Offers — where this flow can send visitors</div>
-      <div id="g_offers">${(g.offers||[]).map(offerCard).join('')||'<div class="hint">No offers yet. A stream output of type Offer picks one of them by ID.</div>'}</div>
+      <div id="g_offers">${(g.offers||[]).map(offerCard).join('')||'<div class="hint">No offers yet. A stream output of type Offer names one or more ids, e.g. o1|||backup.</div>'}</div>
       <button id="g_off_add">${icon('plus')}Add offer</button>
     </div>
     <div class="sec"><div class="st">Links</div>
@@ -1841,7 +1843,7 @@ function collectFlow(){
   g.id=val('g_id').trim(); g.name=val('g_name').trim();
   g.aliases=v('g_aliases')?tagValues(v('g_aliases')):(g.aliases||[]);
   const prev=g.redirect; g.redirect=val('g_redirect'); g.header=val('g_header');
-  g.out=g.redirect==='group'?(v('g_group')?val('g_group'):(prev==='group'?g.out:'')):g.redirect==='offer'?(v('g_offer')?val('g_offer'):(prev==='offer'?g.out:'')):(v('g_outv')?readVariants(v('g_outv')):(prev==='group'||prev==='offer'?'':g.out||''));
+  g.out=g.redirect==='group'?(v('g_group')?val('g_group'):(prev==='group'?g.out:'')):g.redirect==='offer'?(v('g_outv')?readVariants(v('g_outv')):(prev==='offer'?g.out:'')):(v('g_outv')?readVariants(v('g_outv')):(prev==='group'||prev==='offer'?'':g.out||''));
   g.geo=val('g_geo'); g.uniq_method=val('g_uniq');
   g.uniq_seconds=Math.max(0,Math.round((+val('g_uniqh')||0)*3600))||86400;
   g.save_keys=on('g_savekeys'); g.save_keys_se=on('g_savekeys_se');

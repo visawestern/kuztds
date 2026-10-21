@@ -305,6 +305,14 @@ serves that offer's URL exactly like an HTTP redirect, with all output macros
 expanded. `name` and `network` are for you and for reports; `id` is what a
 stream points at.
 
+A stream output may name several offers separated by `|||`:
+`"redirect": "offer", "out": "o1|||backup"`. The stream's distribution picks
+one per visit — rotator remembers the pick in a cookie, evenly rotates in
+Redis, random is the default. Ids that are missing or disabled are skipped, so
+one stale entry does not take the stream down; when none is left the visit
+gets the trash answer. A visit can reach an offer after a click too, through
+flow chaining: one flow hands the visitor to another flow that serves it.
+
 A disabled offer is a draft: its link may be empty, and a visit routed to it
 gets the trash answer — the same for a missing id. Offers live in Flow
 settings → Offers; the admin refuses to save an enabled offer without an
@@ -315,7 +323,8 @@ An offer also carries a `payout` — the revenue of one conversion — and its
 `currency` (ISO 4217, empty = USD). A conversion's `profit=` from the postback
 always wins, and an explicit zero stays zero. When the message carries no
 amount, the served offer's payout is used, converted to USD with the ECB
-rates. A currency without a rate is not guessed: revenue stays 0 and a debug
+rates. A `profit=` value in the postback itself is taken as USD: other
+currencies are not converted there. A currency without a rate is not guessed: revenue stays 0 and a debug
 line says why. The admin rejects a negative payout or a malformed currency
 code.
 
@@ -327,7 +336,9 @@ gets the trash answer. A purchase is counted when the postback is accepted
 (a `trash` reversal does not spend a slot). The counter lives in Redis, keyed
 by flow, offer and UTC date and expiring with the day; if Redis is unreachable
 the engine serves the offer rather than blocking traffic. The fallback itself
-is served without a cap check, so two offers cannot loop.
+is served without a cap check, so two offers cannot loop. Purchases are counted
+from postbacks, and the count needs the offer recorded on the visit: when
+ClickHouse cannot name it, the counter is not incremented (the cap fails open).
 
 Performance rows (and the performance CSV, now with an `offer` column) split a
 stream by offer: a row shows the visits sent to that offer, the click cost

@@ -404,18 +404,38 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// distribution of out variants (|||): random/rotator/evenly.
+	dist := ""
+	if selStream != nil {
+		dist = selStream.Out.Distribution
+	}
+
 	// offer: a stream (or a group default) of type "offer" sends the visitor to
 	// a campaign offer (G-048). The URL then goes through the normal macro and
 	// distribution path as an ordinary redirect. A missing or disabled offer is
 	// a configuration error and gets the trash answer, like a broken group link.
+	//
+	// G-051: the output may name several offers separated by |||. The stream's
+	// distribution then picks one per visit, and ids the flow cannot serve are
+	// skipped, so one stale entry does not take the whole stream down.
 	offerID := ""
 	if redirect == "offer" {
-		off, ok := grp.Offer(outRaw)
-		if !ok || !off.Status {
+		ids := strings.Split(outRaw, "|||")
+		servable := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if o, ok := grp.Offer(id); ok && o.Status {
+				servable = append(servable, o.ID)
+			}
+		}
+		if len(servable) == 0 {
 			d.log.Warn("engine: offer not served", "group", grp.ID, "stream", streamName, "offer", strings.TrimSpace(outRaw))
 			trashResult(d.trashMode, d.trashURL).Write(w)
 			return
 		}
+		// A separate key keeps the offer rotation state from mixing with the
+		// distribution of the offer's own URL variants.
+		picked := pickOut(w, r, d.counters, rctx, grp.ID, streamName+"__o", strings.Join(servable, "|||"), dist)
+		off, _ := grp.Offer(picked)
 		// G-054: the network may buy only some countries. Try its fallback; when
 		// that does not accept the country either, send the visit nowhere.
 		if !off.AcceptsCountry(country) {
@@ -463,11 +483,6 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// distribution of out variants (|||): random/rotator/evenly.
-	dist := ""
-	if selStream != nil {
-		dist = selStream.Out.Distribution
-	}
 	outRaw = pickOut(w, r, d.counters, rctx, grp.ID, streamName, outRaw, dist)
 
 	// 5) Render the output: macros, api_mac, CURL fetch, or a normal redirect.

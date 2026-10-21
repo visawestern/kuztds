@@ -1,10 +1,13 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/egerkuzma/kuztds/internal/config"
+	"github.com/egerkuzma/kuztds/internal/logbuf"
 )
 
 // G-048: поток может вести на предложение кампании (redirect "offer").
@@ -149,5 +152,103 @@ func TestOfferCountries(t *testing.T) {
 	rec := do(t, h2, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome, "CF-IPCountry": "US"})
 	if rec.Code != 200 || rec.Header().Get("Location") != "" {
 		t.Errorf("country outside the offer: got %d %q, want the trash answer", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// G-051: a stream may point at several offers; the stream's distribution picks
+// one per visit, and ids the flow cannot serve are skipped.
+func TestOfferListRotation(t *testing.T) {
+	g := config.NewGroups(&config.Group{
+		ID: "g", Status: true, Redirect: "stop",
+		Offers: []config.Offer{
+			{ID: "o1", URL: "https://one.example", Status: true},
+			{ID: "o2", URL: "https://two.example", Status: true},
+		},
+		Streams: []config.Stream{{Name: "s", Status: true,
+			Out: config.Output{Redirect: "offer", Out: "o1|||o2", Distribution: "rotator"}}},
+	})
+	h, ins, stop := curlEnv(t, g, "0")
+
+	rec := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	first := rec.Header().Get("Location")
+	req := httptest.NewRequest(http.MethodGet, "/g", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	req.Header.Set("X-Forwarded-For", "8.8.8.8")
+	req.Header.Set("User-Agent", uaWinChrome)
+	for _, c := range rec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req)
+	second := rec2.Header().Get("Location")
+	stop()
+	if first != "https://one.example" {
+		t.Fatalf("first visit → %q, want the first offer", first)
+	}
+	if second != "https://two.example" {
+		t.Errorf("second visit → %q, want the second offer", second)
+	}
+	if len(ins.events) != 2 || ins.events[0].Offer != "o1" || ins.events[1].Offer != "o2" {
+		t.Errorf("logged offers = %v, want o1 then o2", offersOf(ins.events))
+	}
+}
+
+func TestOfferListSkipsBroken(t *testing.T) {
+	g := config.NewGroups(&config.Group{
+		ID: "g", Status: true, Redirect: "stop",
+		Offers: []config.Offer{
+			{ID: "draft", Status: false},
+			{ID: "o2", URL: "https://two.example", Status: true},
+		},
+		Streams: []config.Stream{{Name: "s", Status: true,
+			Out: config.Output{Redirect: "offer", Out: "missing|||draft|||o2"}}},
+	})
+	h, _, stop := curlEnv(t, g, "0")
+	defer stop()
+	for i := 0; i < 5; i++ {
+		rec := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+		if got := rec.Header().Get("Location"); got != "https://two.example" {
+			t.Fatalf("visit %d → %q, want the only servable offer", i, got)
+		}
+	}
+
+	none := config.NewGroups(&config.Group{
+		ID: "g", Status: true, Redirect: "stop",
+		Offers:  []config.Offer{{ID: "draft", Status: false}},
+		Streams: []config.Stream{{Name: "s", Status: true, Out: config.Output{Redirect: "offer", Out: "missing|||draft"}}},
+	})
+	h2, _, stop2 := curlEnv(t, none, "0")
+	defer stop2()
+	rec := do(t, h2, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	if rec.Code != 200 || rec.Header().Get("Location") != "" {
+		t.Errorf("no servable offers: got %d %q, want the trash answer", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func offersOf(evs []logbuf.Event) []string {
+	out := make([]string, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, e.Offer)
+	}
+	return out
+}
+
+// A rotated offer that does not buy the visitor's country still goes through
+// the country fallback, not straight to the trash.
+func TestOfferListRotationKeepsCountryRules(t *testing.T) {
+	g := config.NewGroups(&config.Group{
+		ID: "g", Status: true, Redirect: "stop",
+		Offers: []config.Offer{
+			{ID: "de", URL: "https://de.example", Status: true, Countries: []string{"DE"}, Fallback: "any"},
+			{ID: "any", URL: "https://any.example", Status: true},
+		},
+		Streams: []config.Stream{{Name: "s", Status: true,
+			Out: config.Output{Redirect: "offer", Out: "de|||any", Distribution: "rotator"}}},
+	})
+	h, _, stop := curlEnv(t, g, "0")
+	rec := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome, "CF-IPCountry": "US"})
+	stop()
+	if got := rec.Header().Get("Location"); got != "https://any.example" {
+		t.Errorf("US visitor on the first offer → %q, want the country fallback", got)
 	}
 }

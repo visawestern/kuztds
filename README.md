@@ -126,7 +126,9 @@ not like a script.**
   offer (Redis counter per UTC day). Disabled or unknown offers get the trash answer;
   the served offer is logged with every visit and exported to CSV; performance
   and its CSV split a stream by offer, so profit and cost are visible per
-  offer; an offer can also be limited to the countries its network buys.
+  offer; an offer can also be limited to the countries its network buys. A
+  stream may rotate several offers (``o1|||backup``) with the same distribution
+  switch.
 - Output-variant distribution with `|||`: `random` / `rotator` (cookie) /
   `evenly` (Redis counter).
 - `chance` (show with probability), `separation` (swap output by keyword from a
