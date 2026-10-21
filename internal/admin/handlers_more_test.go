@@ -15,6 +15,19 @@ import (
 	"github.com/egerkuzma/kuztds/internal/security"
 )
 
+type fakeVerify struct{ doc config.Verifications }
+
+func (f *fakeVerify) List(context.Context) (config.Verifications, error) {
+	if f.doc.Files == nil {
+		f.doc.Files = []config.Verification{}
+	}
+	return f.doc, nil
+}
+func (f *fakeVerify) Save(_ context.Context, doc config.Verifications) error {
+	f.doc = doc
+	return nil
+}
+
 type fakeLists struct{ data map[string]string }
 
 func (f *fakeLists) Names() ([]string, error) { return []string{"ip_test.dat"}, nil }
@@ -54,6 +67,10 @@ func (denyLimiter) Allow(context.Context, string) (bool, error) { return false, 
 
 // fullServer builds a server with all dependencies (Lists/Keys/Groups/Stats).
 func fullServer(t *testing.T, limiter LoginLimiter) (*httptest.Server, *fakeGroups, *fakeLists) {
+	return fullServerVerify(t, limiter, &fakeVerify{})
+}
+
+func fullServerVerify(t *testing.T, limiter LoginLimiter, fv *fakeVerify) (*httptest.Server, *fakeGroups, *fakeLists) {
 	t.Helper()
 	hash, _ := security.HashPassword("p@ss")
 	fg := &fakeGroups{}
@@ -64,7 +81,7 @@ func fullServer(t *testing.T, limiter LoginLimiter) (*httptest.Server, *fakeGrou
 	s, err := New(Config{
 		AdminUser: "admin", PasswordHash: hash,
 		Sessions: security.NewMemoryStore(),
-		Stats:    fakeStats{}, Groups: fg, Lists: fl, Keys: fakeKeys{},
+		Stats:    fakeStats{}, Groups: fg, Lists: fl, Verify: fv, Keys: fakeKeys{},
 		Limiter: limiter, SessionTTL: time.Hour, CookieSecure: false,
 		EngineURL: "http://engine.local", PostbackKey: "pb-secret",
 	})
@@ -524,5 +541,87 @@ func TestGroupsSaveRejectsBadShare(t *testing.T) {
 	}
 	if code := put(`[{"id":"g","share":{"slug":"promo","title":"Preview","image":"https://cdn.example/p.jpg"}}]`); code != http.StatusOK {
 		t.Errorf("valid share → 200, got %d", code)
+	}
+}
+
+// G-060: verification files are validated against the same namespace as flows
+// and saved as a document the engine reloads.
+func TestVerificationsAPI(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+	do := func(method, payload string) *http.Response {
+		req, _ := http.NewRequest(method, srv.URL+"/api/verifications", strings.NewReader(payload))
+		if method != http.MethodGet {
+			req.Header.Set("X-CSRF-Token", csrf)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	r := do(http.MethodGet, "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("GET = %d", r.StatusCode)
+	}
+	var doc config.Verifications
+	json.NewDecoder(r.Body).Decode(&doc)
+	r.Body.Close()
+	if doc.Files == nil || len(doc.Files) != 0 {
+		t.Errorf("empty document = %+v, want an empty files array", doc)
+	}
+
+	for _, payload := range []string{
+		`{"files":[{"name":"a/b.html","content":"x"}]}`,
+		`{"files":[{"name":"healthz","content":"x"}]}`,
+		`{"files":[{"name":"a.html"}]}`,
+		`{"files":[{"name":"a.html","content":"1"},{"name":"A.html","content":"2"}]}`,
+	} {
+		r = do(http.MethodPut, payload)
+		if r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s → %d, want 400", payload, r.StatusCode)
+		}
+		r.Body.Close()
+	}
+	r = do(http.MethodPut, `{"files":[{"name":"google123.html","content":"proof"}]}`)
+	if r.StatusCode != http.StatusOK {
+		t.Errorf("valid document → %d, want 200", r.StatusCode)
+	}
+	r.Body.Close()
+	r = do(http.MethodGet, "")
+	json.NewDecoder(r.Body).Decode(&doc)
+	r.Body.Close()
+	if len(doc.Files) != 1 || doc.Files[0].Name != "google123.html" || doc.Files[0].Content != "proof" {
+		t.Errorf("saved document = %+v", doc)
+	}
+}
+
+// G-060: a new flow must not shadow a verification file that already exists —
+// the engine would resolve the flow and the cabinet would keep asking.
+func TestGroupsSaveRejectsVerificationCollision(t *testing.T) {
+	fv := &fakeVerify{doc: config.Verifications{Files: []config.Verification{
+		{Name: "promo.html", Content: "proof"},
+		{Name: "preview", Content: "proof"},
+	}}}
+	srv, _, _ := fullServerVerify(t, nil, fv)
+	c, csrf := authedClient(t, srv.URL)
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	for _, payload := range []string{
+		`[{"id":"promo.html"}]`,
+		`[{"id":"g","aliases":["promo.html"]}]`,
+		`[{"id":"g","share":{"slug":"preview","title":"Preview"}}]`,
+	} {
+		if code := put(payload); code != http.StatusBadRequest {
+			t.Errorf("colliding flow %s → 400, got %d", payload, code)
+		}
+	}
+	if code := put(`[{"id":"promo"}]`); code != http.StatusOK {
+		t.Errorf("free flow → 200, got %d", code)
 	}
 }

@@ -41,6 +41,12 @@ type StatsProvider interface {
 	DeleteGroupLogs(ctx context.Context, group string) error
 }
 
+// VerificationsStore reads and writes the domain verification files (G-060).
+type VerificationsStore interface {
+	List(ctx context.Context) (config.Verifications, error)
+	Save(ctx context.Context, doc config.Verifications) error
+}
+
 // KeysReader reads the collected keywords.
 type KeysReader interface {
 	Read(group, date string, se bool) (string, error)
@@ -77,6 +83,7 @@ type Config struct {
 	Stats        StatsProvider
 	Groups       GroupsStore
 	Lists        ListsStore
+	Verify       VerificationsStore // G-060: root files for ad cabinets
 	Keys         KeysReader
 	Limiter      LoginLimiter
 	SessionTTL   time.Duration
@@ -254,6 +261,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/lists", s.auth(http.HandlerFunc(s.handleListsIndex)))
 	mux.Handle("GET /api/lists/{name}", s.auth(http.HandlerFunc(s.handleListRead)))
 	mux.Handle("PUT /api/lists/{name}", s.auth(http.HandlerFunc(s.handleListWrite)))
+
+	mux.Handle("GET /api/verifications", s.auth(http.HandlerFunc(s.handleVerificationsGet)))
+	mux.Handle("PUT /api/verifications", s.auth(http.HandlerFunc(s.handleVerificationsSave)))
 
 	mux.Handle("GET /api/lookup", s.auth(http.HandlerFunc(s.handleLookup)))
 	mux.Handle("POST /api/simulate", s.auth(http.HandlerFunc(s.handleSimulate)))
@@ -709,6 +719,49 @@ func (s *Server) handlePostbacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "trash": trash, "rows": rows})
 }
 
+func (s *Server) handleVerificationsGet(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Verify == nil {
+		writeErr(w, http.StatusServiceUnavailable, "verification files unavailable")
+		return
+	}
+	doc, err := s.cfg.Verify.List(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "verification files error")
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+func (s *Server) handleVerificationsSave(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Verify == nil {
+		writeErr(w, http.StatusServiceUnavailable, "verification files unavailable")
+		return
+	}
+	var doc config.Verifications
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&doc); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	var groups []config.Group
+	if s.cfg.Groups != nil {
+		gs, err := s.cfg.Groups.List(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "groups error")
+			return
+		}
+		groups = gs
+	}
+	if err := config.ValidateVerifications(doc.Files, groups); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.cfg.Verify.Save(r.Context(), doc); err != nil {
+		writeErr(w, http.StatusInternalServerError, "save error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
 func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Keys == nil {
 		writeErr(w, http.StatusServiceUnavailable, "keys unavailable")
@@ -788,6 +841,19 @@ func (s *Server) handleGroupsSave(w http.ResponseWriter, r *http.Request) {
 	if err := config.ValidateShares(groups); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// G-060: a flow would win the root path of a verification file, so the
+	// collision is refused from this side too.
+	if s.cfg.Verify != nil {
+		files, err := s.cfg.Verify.List(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "verification files error")
+			return
+		}
+		if err := config.ValidateVerifications(files.Files, groups); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if err := s.cfg.Groups.Save(r.Context(), groups); err != nil {
 		writeErr(w, http.StatusInternalServerError, "save error")

@@ -978,6 +978,11 @@ function postbackMemo(base,key,networkID,networks){
   return u+'&cid='+(n.cid_token||'{subid}')+'&profit='+(n.profit_token||'{payout}')+
     '&status='+(n.status_token||'{status}')+'&tid='+(n.txn_token||'{txn}');
 }
+// Root verification files (G-060): trimmed names, bodies kept as typed.
+function normVerifications(list){
+  return (list||[]).map(v=>({name:String(v.name||'').trim(),content:String(v.content||'')}))
+    .filter(v=>v.name||v.content);
+}
 // A clean share link (G-059): trimmed, lower-case slug and preview text.
 function normShare(slug,title,description,image){
   slug=String(slug||'').trim().toLowerCase();
@@ -2157,12 +2162,18 @@ async function loadList(){
 }
 
 /* ---------- TOOLS: what an IP tells ---------- */
-let LOOKUP='';
+let LOOKUP='', VERIFICATIONS=[];
 async function tools(arg,live){
   if(arg)LOOKUP=arg;
   view().innerHTML=`<div class="ph"><h1>Tools</h1><span class="sub">what the engine learns from an IP address</span></div>
     <div class="toolbar"><input id="lk-ip" placeholder="IP address, v4 or v6" style="width:280px" value="${esc(LOOKUP)}" autocomplete="off"><button class="primary" id="lk-go">${icon('keywords')}Look up</button></div>
-    <div id="lk-out"></div>`;
+    <div id="lk-out"></div>
+    <h2 style="margin-top:28px">Domain verification</h2>
+    <div class="card pad">
+      <div class="hint" style="margin-bottom:10px">An ad cabinet proves the tracker domain by fetching a file from its root. Add the exact file name and contents the cabinet gave you; the engine serves it at <code class="mono">/name</code> on its next reload. Names may not shadow a flow ID, an alias or a clean link.</div>
+      <div id="vf-rows"></div>
+      <div class="row wrap" style="margin-top:8px"><button class="sm" id="vf-add">${icon('plus')}Add file</button><span class="spacer"></span><button class="primary" id="vf-save">Save files</button></div>
+    </div>`;
   const run=async()=>{
     LOOKUP=q('#lk-ip').value.trim(); if(!LOOKUP)return;
     const out=q('#lk-out');
@@ -2186,6 +2197,37 @@ async function tools(arg,live){
   };
   q('#lk-go').onclick=run; q('#lk-ip').onkeydown=e=>{if(e.key==='Enter')run()};
   if(LOOKUP)run(); else q('#lk-ip').focus();
+  paintVerifications();
+  q('#vf-add').onclick=()=>{collectVerifications();VERIFICATIONS.push({name:'',content:''});paintVerifications(true)};
+  q('#vf-save').onclick=saveVerifications;
+  (async()=>{
+    try{
+      const r=await call('GET','/api/verifications'); if(!live())return;
+      VERIFICATIONS=(r&&r.files)||[]; paintVerifications();
+    }catch(e){if(q('#vf-rows'))q('#vf-rows').innerHTML=stateHTML(e.message,'err')}
+  })();
+}
+function collectVerifications(){
+  if(!q('#vf-rows'))return;
+  VERIFICATIONS=[...qa('[data-vf]')].map(r=>({name:q('.vf-name',r).value,content:q('.vf-body',r).value}));
+}
+function paintVerifications(focusLast){
+  const box=q('#vf-rows'); if(!box)return;
+  box.innerHTML=VERIFICATIONS.map((v,i)=>`<div class="srcrow" data-vf style="grid-template-columns:220px 1fr 26px;margin-bottom:8px">
+    <input class="vf-name mono" value="${esc(v.name||'')}" placeholder="google123.html" autocomplete="off">
+    <textarea class="vf-body code" rows="2" placeholder="the content the cabinet gave you">${esc(v.content||'')}</textarea>
+    <button class="icon sm ghost" data-vfdel="${i}" title="Remove">${icon('x')}</button></div>`).join('')||'<div class="hint">No verification files yet.</div>';
+  qa('[data-vfdel]',box).forEach(b=>b.onclick=()=>{collectVerifications();VERIFICATIONS.splice(+b.dataset.vfdel,1);paintVerifications()});
+  if(focusLast){const n=qa('.vf-name',box);if(n.length)n[n.length-1].focus()}
+}
+async function saveVerifications(){
+  collectVerifications();
+  try{
+    VERIFICATIONS=normVerifications(VERIFICATIONS);
+    await call('PUT','/api/verifications',{files:VERIFICATIONS});
+    if(q('#vf-rows'))paintVerifications();
+    toast('Verification files saved');
+  }catch(e){toast(e.message,true)}
 }
 
 /* ---------- AUTOMATION: the cron service ---------- */

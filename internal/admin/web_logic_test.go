@@ -174,5 +174,10 @@ eq(normShare(' Summer_Preview ',' Picks ','A & B',' https://cdn/p.jpg '),
 eq(normShare('', 'Title', 'Description', 'https://x'), null, 'a preview without a slug is off');
 eq(normShare('   ', '', '', ''), null, 'a blank slug is off');
 
+// Verification files (G-060): trimmed names, empty rows dropped, body as typed.
+eq(normVerifications([{name:' google123.html ',content:' proof\n'},{name:'',content:''}]),
+  [{name:'google123.html',content:' proof\n'}], 'verification rows are trimmed and empty rows dropped');
+eq(normVerifications(null), [], 'no verification files');
+
 if (failed) { console.log(failed + ' check(s) failed'); process.exit(1); }
 `

@@ -63,6 +63,7 @@ func newEng(t *testing.T, groups *config.Groups, h engHarness) http.Handler {
 		}
 	}
 	log := discardLog()
+	verifs := newVerificationStore(filepath.Join(dir, "verify.json"), log)
 	lists := ipindex.NewSet(dir, log)
 	lists.Load(ipLists...)
 	lists.Load(ipListFiles(groups)...) // custom ip_list files from the groups
@@ -70,7 +71,7 @@ func newEng(t *testing.T, groups *config.Groups, h engHarness) http.Handler {
 	seps := seplist.NewSet(dir, log)
 	seps.Load(separationFiles(groups)...)
 	d := &engineDeps{
-		log: log, lists: lists, sigs: sigs, seps: seps, geores: geo.Nop{}, groups: groups,
+		log: log, lists: lists, sigs: sigs, seps: seps, geores: geo.Nop{}, groups: groups, verifs: verifs,
 		dataDir: dir, keysDir: dir, postbackKey: "pb", apiKey: "k",
 		fetcher: fetch.New("", nil), trashMode: h.trashMode, trashURL: h.trashURL,
 	}
@@ -863,5 +864,52 @@ func TestE2E_CleanShareEscapes(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;") {
 		t.Errorf("title is not escaped: %q", body)
+	}
+}
+
+// G-060: an ad cabinet verifies the domain by fetching a file from its root.
+// A group with the same first segment still wins, which is why the admin
+// forbids the collision before it can be saved.
+func TestE2E_DomainVerification(t *testing.T) {
+	verify := `{"files":[
+		{"name":"google123.html","content":"<meta name=\"google-site-verification\" content=\"abc\">"},
+		{"name":"facebook.txt","content":"fb-proof"},
+		{"name":"promo","content":"shadowed"},
+		{"name":"empty.html","content":""}
+	]}`
+	gg := config.NewGroups(&config.Group{ID: "promo", Status: true,
+		Streams: []config.Stream{{Name: "s", Status: true,
+			Out: config.Output{Redirect: "show_text", Out: "FLOW"}}}})
+	h := newEng(t, gg, engHarness{files: map[string]string{"verify.json": verify}})
+
+	rec := do(t, h, "/google123.html", "8.8.8.8", nil)
+	wantCode(t, rec, 200)
+	wantHdr(t, rec, "Content-Type", "text/html; charset=utf-8")
+	wantBody(t, rec, `google-site-verification`)
+	if got := rec.Header().Get("X-Kuztds-Stream"); got != "" {
+		t.Errorf("a verification file must not be routed as a visit, stream=%q", got)
+	}
+
+	// txt gets its own type; HEAD has headers and no body.
+	rec = do(t, h, "/facebook.txt", "8.8.8.8", nil)
+	wantHdr(t, rec, "Content-Type", "text/plain; charset=utf-8")
+	wantBody(t, rec, "fb-proof")
+	req := httptest.NewRequest(http.MethodHead, "/facebook.txt", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	wantCode(t, rec, 200)
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD must not have a body: %q", rec.Body.String())
+	}
+
+	// The flow wins its own name; an empty file is not published; only the
+	// exact root path is a verification file.
+	rec = do(t, h, "/promo", "8.8.8.8", nil)
+	wantBody(t, rec, "FLOW")
+	for _, p := range []string{"/empty.html", "/google123.html/more", "/nope.html"} {
+		rec = do(t, h, p, "8.8.8.8", nil)
+		if strings.Contains(rec.Body.String(), "google-site-verification") || strings.Contains(rec.Body.String(), "fb-proof") {
+			t.Errorf("%s must not serve a verification file: %q", p, rec.Body.String())
+		}
 	}
 }

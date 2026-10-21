@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -77,6 +78,11 @@ func main() {
 	// databases the engine uses. Automation: the cron service's config file.
 	cfg.DataDir = os.Getenv("KUZTDS_DATA_DIR")
 	cfg.CronFile = os.Getenv("KUZTDS_CRON_FILE")
+	if vf := os.Getenv("KUZTDS_VERIFY_FILE"); vf != "" {
+		cfg.Verify = admin.NewFileVerifications(vf)
+	} else if cfg.DataDir != "" {
+		cfg.Verify = admin.NewFileVerifications(filepath.Join(cfg.DataDir, "verify.json"))
+	}
 	cfg.GeoCityPath, cfg.GeoASNPath = os.Getenv("KUZTDS_GEO_DB"), os.Getenv("KUZTDS_ASN_DB")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

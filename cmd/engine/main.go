@@ -160,6 +160,10 @@ func main() {
 	rates := newRatesStore(getenv("KUZTDS_RATES_FILE", filepath.Join(dataDir, "rates.json")), log)
 	go rates.watch(ctx, reload)
 
+	// G-060: root files that ad cabinets fetch to verify the domain.
+	verifs := newVerificationStore(getenv("KUZTDS_VERIFY_FILE", filepath.Join(dataDir, "verify.json")), log)
+	go verifs.watch(ctx, reload)
+
 	// ClickHouse logs (phase 4): asynchronous batch writes. Optional.
 	var logs *logbuf.Buffer
 	var chConn *store.CH
@@ -185,7 +189,7 @@ func main() {
 
 	d := &engineDeps{
 		log: log, lists: lists, sigs: sigs, seps: seps, geores: geores, counters: counters,
-		groups: groups, logs: logs, chConn: chConn, rates: rates, fetcher: fetcher,
+		groups: groups, logs: logs, chConn: chConn, rates: rates, verifs: verifs, fetcher: fetcher,
 		dataDir: dataDir, keysDir: keysDir, postbackKey: postbackKey, apiKey: apiKey,
 		trashMode: trashMode, trashURL: trashURL, curlCacheMin: curlCacheMin,
 	}

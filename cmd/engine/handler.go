@@ -41,6 +41,7 @@ type engineDeps struct {
 	chConn       *store.CH
 	rates        *ratesStore
 	fetcher      *fetch.Client
+	verifs       *verificationStore
 	dataDir      string
 	keysDir      string
 	postbackKey  string
@@ -228,9 +229,22 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 	} else {
 		grp = demoGroup
 	}
+	path := strings.Trim(r.URL.Path, "/")
+	oneSegment := !strings.Contains(path, "/")
+	if grp == nil && !apiMode && oneSegment && d.verifs != nil &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		if vf, ok := d.verifs.Get(path); ok {
+			w.Header().Set("Content-Type", vf.ct)
+			w.Header().Set("Cache-Control", "public, max-age=300")
+			if r.Method == http.MethodHead {
+				return
+			}
+			_, _ = w.Write(vf.body)
+			return
+		}
+	}
 	if grp == nil && !apiMode && d.groups != nil {
-		path := strings.Trim(r.URL.Path, "/")
-		if !strings.Contains(path, "/") && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		if oneSegment && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			if sg, ok := d.groups.GetShare(gid); ok {
 				if !sg.Status {
 					trashResult(d.trashMode, d.trashURL).Write(w)

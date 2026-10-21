@@ -81,6 +81,7 @@ go run ./cmd/cron
 | `KUZTDS_POSTBACK_KEY` | key for the `?pb=` postback |
 | `KUZTDS_API_KEY` | key for the `?api=` mode (api clients) |
 | `KUZTDS_KEYS_DIR` | directory for collected keywords |
+| `KUZTDS_VERIFY_FILE` | root verification files for ad cabinets (`<data dir>/verify.json`) |
 | `KUZTDS_TRASH_MODE` / `KUZTDS_TRASH_URL` | behavior for an unknown group (0=200,1=redirect,2=403,3=404) |
 | `KUZTDS_CURL_CACHE` | CURL redirect cache, minutes |
 | `KUZTDS_CURL_UA` | User-Agent the engine sends for CURL / `[REMOTE]` fetches |
@@ -99,6 +100,7 @@ go run ./cmd/cron
 | `KUZTDS_REDIS_ADDR` / `KUZTDS_CLICKHOUSE_*` | stores (sessions, statistics) |
 | `KUZTDS_GEO_DB` / `KUZTDS_ASN_DB` | same paths as the engine — used by Tools (IP lookup) and "Test a visitor" |
 | `KUZTDS_CRON_FILE` | the cron service's config file; without it the Automation page is read-only |
+| `KUZTDS_VERIFY_FILE` | same file as the engine — edited on the Tools page |
 
 ### cron
 | Variable | Purpose |
@@ -234,6 +236,11 @@ Enter an IP address (or follow "look up" from a log row): country, city,
 region, time zone and UTC offset; ASN and organization; mobile operator; which
 `.dat` lists contain it; and which geo databases are loaded, with their build
 dates.
+
+The same page holds **Domain verification**: add the exact file names and
+contents an ad cabinet asked you to host (Google, Facebook, TikTok…). The engine
+serves each one at `/<name>` on its next reload. A name that equals a flow ID,
+alias or clean link is rejected — the flow would win the path.
 
 ### Automation
 
