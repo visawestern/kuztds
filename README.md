@@ -88,6 +88,8 @@ not like a script.**
 ## Features
 
 **Traffic segmentation (per stream):**
+- `@empty` meta-word for referer, keyword and URL-parameter filters.
+- Per-stream **Collect clicks off** for service flows: serve without logging.
 - Find → replace on the flow URL after macros, leaving offer links untouched.
 - Roles: a `forced` stream is tried before every regular one, one `default`
   stream catches whatever no regular stream matched, the rest go in list order.

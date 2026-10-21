@@ -438,7 +438,10 @@ type Stream struct {
 	Type string `json:"type,omitempty"`
 	// URLReplace edits the flow's own URL after macros (G-130). It never
 	// touches an offer or landing URL.
-	URLReplace []URLEdit  `json:"url_replace,omitempty"`
+	URLReplace []URLEdit `json:"url_replace,omitempty"`
+	// SkipClicks serves the visit without writing a click row (G-126): service
+	// flows stay out of statistics, and their postbacks cannot be attributed.
+	SkipClicks bool       `json:"skip_clicks,omitempty"`
 	Comment    string     `json:"comment"` // operator's note, not used by the engine
 	Rules      Rules      `json:"rules"`
 	Out        Output     `json:"out"`

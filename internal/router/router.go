@@ -110,11 +110,11 @@ func Why(s *config.Stream, v Visitor, deps Deps) string {
 	// lang/country — contains semantics).
 	// raw, or the joined values (the config may set only values).
 	langRaw := orJoin(r.Lang.Raw, r.Lang.Values)
-	if rejectList(r.Lang.Flag, langRaw != "", containsCI(langRaw, v.Lang)) {
+	if rejectList(r.Lang.Flag, langRaw != "", wantsEmpty(r.Lang.Values) && emptyish(v.Lang) || containsCI(langRaw, v.Lang)) {
 		return "lang"
 	}
 	countryRaw := orJoin(r.Country.Raw, r.Country.Values)
-	if rejectList(r.Country.Flag, countryRaw != "", containsCI(countryRaw, v.Country)) {
+	if rejectList(r.Country.Flag, countryRaw != "", wantsEmpty(r.Country.Values) && emptyish(v.Country) || containsCI(countryRaw, v.Country)) {
 		return "country"
 	}
 	// city/region — element-wise exact match.
@@ -238,7 +238,7 @@ func Why(s *config.Stream, v Visitor, deps Deps) string {
 	if rejectList(r.ASN.Flag, len(r.ASN.Values) > 0, asnAny(r.ASN.Values, v.ASN)) {
 		return "asn"
 	}
-	if rejectList(r.Org.Flag, cfgd(r.Org), !emptyish(v.Org) && textOrRegex(r.Org, v.Org)) {
+	if rejectList(r.Org.Flag, cfgd(r.Org), wantsEmpty(r.Org.Values) && emptyish(v.Org) || !emptyish(v.Org) && textOrRegex(r.Org, v.Org)) {
 		return "org"
 	}
 	// Time zone: a UTC offset ("+3", "+5:30") or an IANA name ("Europe/Moscow").
@@ -280,6 +280,19 @@ func rejectList(flag config.Flag, configured, matched bool) bool {
 
 func emptyish(s string) bool { return s == "" || s == Empty }
 
+// emptyWord is Keitaro's meta-word (G-138): the value is empty, not the text.
+const emptyWord = "@empty"
+
+// wantsEmpty reports whether the list asks for an empty value.
+func wantsEmpty(values []string) bool {
+	for _, e := range values {
+		if strings.EqualFold(strings.TrimSpace(e), emptyWord) {
+			return true
+		}
+	}
+	return false
+}
+
 // cfgd: the filter is configured if raw or values is set.
 func cfgd(f config.ListFilter) bool { return f.Raw != "" || len(f.Values) > 0 }
 
@@ -302,11 +315,11 @@ func containsCI(raw, value string) bool {
 // substrAny: any of the values is a substring of subject (case-insensitive).
 func substrAny(values []string, subject string) bool {
 	if subject == "" {
-		return false
+		return wantsEmpty(values)
 	}
 	ls := strings.ToLower(subject)
 	for _, e := range values {
-		if e != "" && strings.Contains(ls, strings.ToLower(e)) {
+		if e != "" && !strings.EqualFold(strings.TrimSpace(e), emptyWord) && strings.Contains(ls, strings.ToLower(e)) {
 			return true
 		}
 	}
@@ -321,10 +334,10 @@ func joinVer(name, ver string) string {
 // exactAny: exact (case-insensitive) match of value with one of the elements.
 func exactAny(values []string, value string) bool {
 	if emptyish(value) {
-		return false
+		return wantsEmpty(values)
 	}
 	for _, e := range values {
-		if strings.EqualFold(strings.TrimSpace(e), value) {
+		if !strings.EqualFold(strings.TrimSpace(e), emptyWord) && strings.EqualFold(strings.TrimSpace(e), value) {
 			return true
 		}
 	}
@@ -373,16 +386,17 @@ func tzAny(values []string, zone, offset string) bool {
 // queryAny: "name" matches a present, non-empty variable; "name=value"
 // matches its value exactly (case-insensitive).
 func queryAny(values []string, q url.Values) bool {
-	if len(q) == 0 {
-		return false
-	}
 	for _, e := range values {
-		name, want, hasValue := strings.Cut(strings.TrimSpace(e), "=")
+		e = strings.TrimSpace(e)
+		name, want, hasValue := strings.Cut(e, "=")
 		if name == "" {
 			continue
 		}
 		got := q.Get(name)
 		if got == "" {
+			if hasValue && strings.EqualFold(strings.TrimSpace(want), emptyWord) {
+				return true
+			}
 			continue
 		}
 		if !hasValue || strings.EqualFold(got, want) {
@@ -400,9 +414,12 @@ func textOrRegex(f config.ListFilter, subject string) bool {
 		}
 		return false
 	}
+	if wantsEmpty(f.Values) && emptyish(subject) {
+		return true
+	}
 	ls := strings.ToLower(subject)
 	for _, e := range f.Values {
-		if e != "" && strings.Contains(ls, strings.ToLower(e)) {
+		if e != "" && !strings.EqualFold(strings.TrimSpace(e), emptyWord) && strings.Contains(ls, strings.ToLower(e)) {
 			return true
 		}
 	}

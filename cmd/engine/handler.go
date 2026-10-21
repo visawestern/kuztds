@@ -571,7 +571,8 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6) Event log — asynchronous, the response does not wait for the write (phase 4).
-	if d.logs != nil {
+	// G-126: a service flow is served but deliberately leaves no click.
+	if d.logs != nil && (selStream == nil || !selStream.SkipClicks) {
 		// Click cost by the entry campaign's model (G-119…G-121). The value is
 		// normalized to USD, so cost_cur says USD; a currency without a rate is
 		// honestly 0 + debug rather than a guess.

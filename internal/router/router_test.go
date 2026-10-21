@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/netip"
+	"net/url"
 	"testing"
 	"time"
 
@@ -303,5 +304,52 @@ func TestSelect_DisabledTypesIgnored(t *testing.T) {
 	g.Streams[2].Status = false
 	if s, ok := Select(g, Visitor{}, Deps{}); ok {
 		t.Fatalf("with everything off got %q, want no stream", s.Name)
+	}
+}
+
+// G-138: @empty selects an empty value instead of the literal text.
+func TestSelect_EmptyMetaWord(t *testing.T) {
+	only := func(k string, values ...string) *config.Group {
+		return &config.Group{Streams: []config.Stream{{Name: "s", Status: true, Rules: config.Rules{
+			Referer: config.ListFilter{Flag: config.FlagB, Values: values},
+		}}}}
+	}
+	g := only("referer", "@empty")
+	if s, ok := Select(g, Visitor{Referer: Empty}, Deps{}); !ok || s.Name != "s" {
+		t.Fatalf("empty referer with @empty = %v, want a match", s)
+	}
+	if _, ok := Select(g, Visitor{Referer: "https://x"}, Deps{}); ok {
+		t.Fatal("@empty must not match a non-empty referer")
+	}
+	// It is a meta-word, not a substring.
+	g = only("referer", "@empty")
+	if _, ok := Select(g, Visitor{Referer: "x@empty"}, Deps{}); ok {
+		t.Fatal("@empty matched inside a literal value")
+	}
+	// IS NOT @empty: only non-empty values pass.
+	g = &config.Group{Streams: []config.Stream{{Name: "s", Status: true, Rules: config.Rules{
+		Key: config.ListFilter{Flag: config.FlagA, Values: []string{"@empty"}},
+	}}}}
+	if s, ok := Select(g, Visitor{Key: "buy"}, Deps{}); !ok || s.Name != "s" {
+		t.Fatalf("IS NOT @empty with a keyword = %v, want a match", s)
+	}
+	if _, ok := Select(g, Visitor{}, Deps{}); ok {
+		t.Fatal("IS NOT @empty must reject an empty keyword")
+	}
+}
+
+// G-138: a URL parameter can require an empty value: name=@empty.
+func TestSelect_QueryEmptyMetaWord(t *testing.T) {
+	g := &config.Group{Streams: []config.Stream{{Name: "s", Status: true, Rules: config.Rules{
+		Query: config.ListFilter{Flag: config.FlagB, Values: []string{"utm_source=@empty"}},
+	}}}}
+	if s, ok := Select(g, Visitor{Query: url.Values{}}, Deps{}); !ok || s.Name != "s" {
+		t.Fatalf("absent parameter = %v, want a match", s)
+	}
+	if s, ok := Select(g, Visitor{Query: url.Values{"utm_source": {""}}}, Deps{}); !ok || s.Name != "s" {
+		t.Fatalf("empty parameter = %v, want a match", s)
+	}
+	if _, ok := Select(g, Visitor{Query: url.Values{"utm_source": {"fb"}}}, Deps{}); ok {
+		t.Fatal("name=@empty must not match a filled parameter")
 	}
 }

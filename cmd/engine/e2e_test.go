@@ -737,3 +737,41 @@ func TestE2E_URLReplacement(t *testing.T) {
 	rec = do(t, h, "/t?q=abc", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
 	wantBody(t, rec, "OLD abc")
 }
+
+// G-126: a service flow is served but leaves no click behind; ordinary flows
+// keep logging exactly as before.
+func TestE2E_SkipClicks(t *testing.T) {
+	gg := config.NewGroups(
+		&config.Group{ID: "g", Status: true, Redirect: "stop", Streams: []config.Stream{
+			{Name: "normal", Status: true, Out: config.Output{Redirect: "show_text", Out: "N"}},
+		}},
+		&config.Group{ID: "service", Status: true, Redirect: "stop", Streams: []config.Stream{
+			{Name: "quiet", Status: true, SkipClicks: true, Out: config.Output{Redirect: "show_text", Out: "Q"}},
+		}},
+	)
+	h, ins, stop := curlEnv(t, gg, "0")
+	rec := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	wantBody(t, rec, "N")
+	rec = do(t, h, "/service", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	wantBody(t, rec, "Q")
+	stop()
+	if len(ins.events) != 1 || ins.events[0].GroupID != "g" {
+		t.Fatalf("logged events = %+v, want only the normal flow's click", ins.events)
+	}
+}
+
+// G-138: @empty routes the visits that carry no referer.
+func TestE2E_EmptyRefererMetaWord(t *testing.T) {
+	gg := config.NewGroups(&config.Group{ID: "g", Status: true, Redirect: "stop", Streams: []config.Stream{
+		{Name: "noref", Status: true,
+			Rules: config.Rules{Referer: config.ListFilter{Flag: config.FlagB, Values: []string{"@empty"}}},
+			Out:   config.Output{Redirect: "show_text", Out: "EMPTY"}},
+		{Name: "rest", Status: true, Out: config.Output{Redirect: "show_text", Out: "REST"}},
+	}})
+	h := newEng(t, gg, engHarness{})
+	rec := do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome})
+	wantStream(t, rec, "noref")
+	wantBody(t, rec, "EMPTY")
+	rec = do(t, h, "/g", "8.8.8.8", map[string]string{"User-Agent": uaWinChrome, "Referer": "https://google.com/"})
+	wantStream(t, rec, "rest")
+}

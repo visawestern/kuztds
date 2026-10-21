@@ -1030,11 +1030,11 @@ const COND=[
   {k:'browser',l:'Browser',g:'Device',kind:'list',m:'is',ph:'Chrome, Safari 16'},
   {k:'yabrowser',l:'Yandex Browser',g:'Device',kind:'tri',opts:['any','exclude','only Yandex Browser']},
   {k:'lang',l:'Language',g:'Request',kind:'list',m:'is',ph:'ru, en'},
-  {k:'referer_text',l:'Referer',g:'Request',kind:'list',m:'has',rx:1,ph:'google., facebook.com',hint:'any part of the address'},
+  {k:'referer_text',l:'Referer',g:'Request',kind:'list',m:'has',rx:1,ph:'google., facebook.com',hint:'any part of the address; @empty = no referer'},
   {k:'has_referer',l:'Referer present',g:'Request',kind:'tri',opts:['any','required','must be absent']},
   {k:'domain_text',l:'Source domain',g:'Request',kind:'list',m:'dom',rx:1,ph:'example.com'},
-  {k:'key_text',l:'Keyword',g:'Request',kind:'list',m:'has',rx:1,ph:'buy, cheap',hint:'any part of the keyword'},
-  {k:'get',l:'URL parameter',g:'Request',kind:'list',m:'is',ph:'utm_source=fb, sub1',hint:'name=value, or just a name that must be present'},
+  {k:'key_text',l:'Keyword',g:'Request',kind:'list',m:'has',rx:1,ph:'buy, cheap',hint:'any part of the keyword; @empty = no keyword'},
+  {k:'get',l:'URL parameter',g:'Request',kind:'list',m:'is',ph:'utm_source=fb, sub1',hint:'name=value, just a name that must be present, or name=@empty for an empty/absent one'},
   {k:'ua_text',l:'User-Agent',g:'Request',kind:'list',m:'has',rx:1,ph:'iPhone, Android',hint:'any part of the User-Agent'},
   {k:'unique',l:'Unique',g:'Visit',kind:'tri',opts:['any','unique only','repeat visits only']},
   {k:'schedule',l:'Days of week',g:'Visit',kind:'schedule'},
@@ -1527,6 +1527,8 @@ function paintStream(){
         <div class="fld"><label>Probability, %</label><input type="number" id="am_prob" value="${am.prob||0}"></div>
       </div>
     </details>
+    <div class="sec"><label class="chk"><input type="checkbox" id="s_skip" ${s.skip_clicks?'checked':''}>Don't collect clicks — a service flow</label>
+      <div class="hint">Visits are served normally but no click, cost or postback can be attributed to them. Use it for previews and health checks.</div></div>
     <div class="sec"><div class="fld" style="margin:0"><label>Note</label><input id="s_comment" value="${esc(s.comment||'')}" placeholder="what this stream is for — shown on the canvas"></div></div>`;
   body.scrollTop=keep;
   // Structure changes: commit what is on screen, change the model, paint again.
@@ -1712,6 +1714,7 @@ function collectStream(){
   s.status=on('s_status');
   s.type=val('s_type')||'regular';
   const urw=q('#s_urlrw',d); s.url_replace=urw?readURLReplace(urw):(s.url_replace||[]);
+  s.skip_clicks=on('s_skip');
   s.comment=val('s_comment').trim();
   const red=val('s_redirect'), prev=s.out||{};
   // A field that is not on screen (the type does not use it) keeps its value.
