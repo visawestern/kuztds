@@ -150,6 +150,63 @@ func TestGroupsSaveValidation(t *testing.T) {
 	}
 }
 
+func TestGroupsSaveRejectsBadCost(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	// G-119: unknown price model must not be saved (engine would price it 0 silently).
+	if code := put(`[{"id":"x","cost":{"model":"barter","value":1}}]`); code != http.StatusBadRequest {
+		t.Errorf("bad cost model → 400, got %d", code)
+	}
+	if code := put(`[{"id":"x","cost":{"model":"cpc","value":-1}}]`); code != http.StatusBadRequest {
+		t.Errorf("negative cost → 400, got %d", code)
+	}
+	// Valid price saves fine.
+	if code := put(`[{"id":"x","cost":{"model":"cpc","value":0.05,"currency":"USD"}}]`); code != http.StatusOK {
+		t.Errorf("valid cost → 200, got %d", code)
+	}
+}
+
+// G-048: an enabled offer with no reachable link (or a duplicate id) must not
+// be saved — the flow would fall into the trash on every visit.
+func TestGroupsSaveRejectsBadOffer(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	for _, payload := range []string{
+		`[{"id":"x","offers":[{"id":"o1","status":true}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"net.example","status":true}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a"},{"id":"o1","url":"https://b"}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","payout":-1}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","payout":1,"currency":"US$"}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","cap_daily":-1}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","cap_daily":1,"fallback":"nope"}]}]`,
+		`[{"id":"x","offers":[{"id":"o1","url":"https://a","cap_daily":1,"fallback":"o2"},{"id":"o2","url":"https://b","status":false}]}]`,
+	} {
+		if code := put(payload); code != http.StatusBadRequest {
+			t.Errorf("bad offer %s → 400, got %d", payload, code)
+		}
+	}
+	// A disabled draft (no link yet) and a filled enabled offer both save.
+	if code := put(`[{"id":"x","offers":[{"id":"draft"},{"id":"o2","name":"Backup","url":"https://backup.example","status":true},{"id":"o1","name":"Main","network":"net","url":"https://net.example/?cid=[CID]","status":true,"payout":1.5,"currency":"EUR","cap_daily":10,"fallback":"o2"}]}]`); code != http.StatusOK {
+		t.Errorf("valid offers → 200, got %d", code)
+	}
+}
+
 func TestListsEndpoints(t *testing.T) {
 	srv, _, fl := fullServer(t, nil)
 	c, csrf := authedClient(t, srv.URL)

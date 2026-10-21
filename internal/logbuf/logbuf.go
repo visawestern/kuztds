@@ -52,6 +52,9 @@ type Event struct {
 	Counter   uint32
 	CID       string
 	Postback  string
+	Cost      float64 // USD price of the click by the campaign model (G-119); 0 = unpriced
+	CostCur   string  // model currency for transparency (may be empty)
+	Offer     string  // offer served, when the output was redirect "offer" (G-048)
 	ASN       uint32
 	Org       string
 	Timezone  string

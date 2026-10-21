@@ -33,7 +33,7 @@ func (r *Runner) runConversions(ctx context.Context, cfg Config) (string, error)
 		r.state(func(st *Status) { st.ConvSince = to })
 		return "watching for new conversions", nil
 	}
-	rows, _, err := r.pb.Postbacks(ctx, from, to, "", 1000)
+	rows, _, _, err := r.pb.Postbacks(ctx, from, to, "", 1000)
 	if err != nil {
 		return "", err
 	}

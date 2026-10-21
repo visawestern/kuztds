@@ -110,13 +110,23 @@ not like a script.**
 - `save_ip`: append a detected search-engine IP back into its list.
 
 **Output & rendering:**
-- 18 redirect types (HTTP redirect, JS, meta refresh, iframe, inline HTML, error
+- 19 redirect types (HTTP redirect, JS, meta refresh, iframe, inline HTML, error
   pages, JSON API responses, stub, …) — including **`group`: hand the visitor
-  to another group**, so flows can be chained.
+  to another group**, so flows can be chained, and **`offer`**: serve a named
+  offer link of the campaign (see below).
 - A rich macro set: `[KEY] [IP] [COUNTRY] [CITY] [REGION] [LANG] [DEVICE]
   [OPERATOR] [DOMAIN] [USERAGENT] [CID] [ASN] [ORG] [TIMEZONE] [UTC]
   [PAR-1..5] [()COUNTRY()] [()CITY()]
   [RANDNUM-a-b] [RANDSTR-(set)-n] [RANDLINE-(file)-n] [RANDDFL-(dir)-n]`.
+- **Offers**: a campaign carries named offers (`id`, `network`, link, enabled);
+  a stream of type `offer` names one by id, and the engine serves that link
+  with all macros expanded. Each offer has a payout and its currency: a
+  postback's `profit=` wins, otherwise the payout becomes the conversion
+  revenue (converted to USD), plus a daily purchase cap with a fallback
+  offer (Redis counter per UTC day). Disabled or unknown offers get the trash answer;
+  the served offer is logged with every visit and exported to CSV; performance
+  and its CSV split a stream by offer, so profit and cost are visible per
+  offer.
 - Output-variant distribution with `|||`: `random` / `rotator` (cookie) /
   `evenly` (Redis counter).
 - `chance` (show with probability), `separation` (swap output by keyword from a
@@ -454,6 +464,7 @@ TimeoutStopSec=30
 | `KUZTDS_GROUPS_FILE` / `KUZTDS_DATA_DIR` / `KUZTDS_KEYS_DIR` | same paths as the engine |
 | `KUZTDS_GEO_DB` / `KUZTDS_ASN_DB` | same paths as the engine (IP lookup, visitor test) |
 | `KUZTDS_CRON_FILE` | the cron service's config file (enables the Automation page) |
+| `KUZTDS_RATES_FILE` | currency rates (JSON) the engine reads; default `<DATA_DIR>/rates.json`, written by the cron "Currency rates" job |
 
 ### Cron service
 | Variable | Purpose |
@@ -604,10 +615,13 @@ search-engine IP lists. Detection runs **after** stream selection. Then:
 `[CID]` macro, then have the offer call back:
 
 ```
-http://your-host/?pb=YOUR_POSTBACK_KEY&cid=[CID]&profit=1.50
+http://your-host/?pb=YOUR_POSTBACK_KEY&cid=[CID]&profit=1.50&status=sale
 ```
 The engine finds the original event by `cid` and records the conversion (visible
-under **Conversions**).
+under **Conversions**). `status` is required (`lead/sale/rejected/registration/
+deposit/trash` or a custom `a-z0-9_` value); `trash` zeroes Revenue but keeps the
+amount in a separate Revenue (trash) metric. Optional `tid` is the transaction id
+against duplicate postbacks.
 
 **API mode.** A landing page can ask the engine for a decision without redirecting
 the visitor itself: send `?api=base64(JSON)` (authenticated with `KUZTDS_API_KEY`)

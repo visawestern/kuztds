@@ -5,7 +5,14 @@
 // loaded separately into a RAM cache with hot-reload — see ARCHITECTURE.md.
 package config
 
-import "time"
+import (
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+	"unicode"
+)
 
 // App is the static process configuration (from yaml + env).
 type App struct {
@@ -69,6 +76,9 @@ type Group struct {
 	SaveKeys    bool         `json:"save_keys"`    // save keywords
 	SaveKeysSE  bool         `json:"save_keys_se"` // save keywords from search engines
 
+	Cost   CostModel `json:"cost"`   // G-119…G-123: price model of the campaign
+	Offers []Offer   `json:"offers"` // G-048: offers of the campaign
+
 	Streams []Stream `json:"streams"`
 }
 
@@ -77,6 +87,145 @@ type FirewallRule struct {
 	Enabled bool `json:"enabled"`
 	Queries int  `json:"queries"` // g_f_queries
 	Seconds int  `json:"seconds"` // g_f_time
+}
+
+// CostModel — цена кампании G-119…G-123 (паритет Binom v2).
+// Model: "", "cpc", "cpm", "cpa", "cpv", "revshare". Пустая — цена не задана.
+// Пересчёт в деньги — в internal/cost (чистые функции).
+type CostModel struct {
+	Model       string  `json:"model"`
+	Value       float64 `json:"value"`
+	Currency    string  `json:"currency"`
+	PayoutPct   float64 `json:"payout_pct"`   // revshare: доля выплаты
+	LossPct     float64 `json:"loss_pct"`     // G-122: потери трафика, %
+	PostbackPct float64 `json:"postback_pct"` // G-123: доля постбеков источнику, %
+}
+
+// Validate rejects an unusable price config. Empty model (no pricing) is valid.
+func (m CostModel) Validate() error {
+	switch strings.ToLower(strings.TrimSpace(m.Model)) {
+	case "", "cpc", "cpm", "cpa", "cpv", "revshare":
+	default:
+		return fmt.Errorf("config: unknown cost model %q", m.Model)
+	}
+	if m.Value < 0 {
+		return fmt.Errorf("config: cost value must not be negative")
+	}
+	if cur := strings.TrimSpace(m.Currency); cur != "" {
+		for _, r := range cur {
+			if !unicode.IsLetter(r) {
+				return fmt.Errorf("config: cost currency %q is not a code", m.Currency)
+			}
+		}
+		if len([]rune(cur)) != 3 {
+			return fmt.Errorf("config: cost currency %q is not a 3-letter code", m.Currency)
+		}
+	}
+	if m.PayoutPct < 0 || m.PayoutPct > 100 {
+		return fmt.Errorf("config: payout pct must be 0..100")
+	}
+	if m.LossPct < 0 || m.LossPct >= 100 {
+		return fmt.Errorf("config: loss pct must be 0..99")
+	}
+	if m.PostbackPct < 0 || m.PostbackPct > 100 {
+		return fmt.Errorf("config: postback pct must be 0..100")
+	}
+	return nil
+}
+
+// Offer — предложение (оффер) кампании G-048: карточка со ссылкой.
+// Ссылка получает те же макросы, что обычный вывод потока; Status=false —
+// черновик, движок такой оффер не обслуживает.
+type Offer struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Network  string  `json:"network"` // партнёрская сеть, для отчётов
+	URL      string  `json:"url"`
+	Status   bool    `json:"status"`
+	Payout   float64 `json:"payout"`    // G-049: revenue per conversion, 0 = none
+	Currency string  `json:"currency"`  // ISO 4217 of the payout; empty = USD
+	CapDaily int     `json:"cap_daily"` // G-050: purchases per UTC day, 0 = unlimited
+	Fallback string  `json:"fallback"`  // G-050: offer served once the cap is reached
+}
+
+var (
+	offerIDRe  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	offerCurRe = regexp.MustCompile(`^[A-Za-z]{3}$`)
+)
+
+// ValidateOffers rejects offers the engine could not serve. Disabled offers
+// may be incomplete: they are drafts the operator is still filling in.
+func (g Group) ValidateOffers() error {
+	seen := map[string]bool{}
+	for i, o := range g.Offers {
+		if o.ID != "" && !offerIDRe.MatchString(o.ID) {
+			return fmt.Errorf("config: group %s offer %d: id %q must be letters, digits, _ or -", g.ID, i+1, o.ID)
+		}
+		if seen[o.ID] && o.ID != "" {
+			return fmt.Errorf("config: group %s: duplicate offer id %q", g.ID, o.ID)
+		}
+		seen[o.ID] = true
+		// G-049: the payout is a number in an ISO currency; the rate is looked
+		// up at postback time, so only the shape is checked here.
+		if o.Payout < 0 {
+			return fmt.Errorf("config: group %s offer %q: payout must not be negative", g.ID, o.ID)
+		}
+		if o.Currency != "" && !offerCurRe.MatchString(o.Currency) {
+			return fmt.Errorf("config: group %s offer %q: currency %q must be a 3-letter code", g.ID, o.ID, o.Currency)
+		}
+		if o.CapDaily < 0 {
+			return fmt.Errorf("config: group %s offer %q: daily cap must not be negative", g.ID, o.ID)
+		}
+		if o.Fallback == o.ID && o.ID != "" {
+			return fmt.Errorf("config: group %s offer %q: fallback must be another offer", g.ID, o.ID)
+		}
+		if !o.Status {
+			continue
+		}
+		if o.ID == "" {
+			return fmt.Errorf("config: group %s offer %d: an enabled offer needs an id", g.ID, i+1)
+		}
+		if err := offerURL(o.URL); err != nil {
+			return fmt.Errorf("config: group %s offer %q: %w", g.ID, o.ID, err)
+		}
+	}
+	// Fallbacks may point forward, so they are checked once every id is known.
+	for _, o := range g.Offers {
+		if o.Fallback == "" {
+			continue
+		}
+		fb, ok := g.Offer(o.Fallback)
+		if !ok {
+			return fmt.Errorf("config: group %s offer %q: fallback %q does not exist", g.ID, o.ID, o.Fallback)
+		}
+		if !fb.Status {
+			return fmt.Errorf("config: group %s offer %q: fallback %q is disabled", g.ID, o.ID, o.Fallback)
+		}
+	}
+	return nil
+}
+
+func offerURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("%q is not an http(s) URL", raw)
+	}
+	return nil
+}
+
+// Offer returns a configured offer by id. A disabled offer is still returned:
+// the caller decides between serving it and falling back.
+func (g Group) Offer(id string) (Offer, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Offer{}, false
+	}
+	for _, o := range g.Offers {
+		if o.ID == id {
+			return o, true
+		}
+	}
+	return Offer{}, false
 }
 
 // Stream is a stream with filtering rules and output parameters.

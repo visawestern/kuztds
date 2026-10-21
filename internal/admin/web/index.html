@@ -647,8 +647,8 @@ async function loadPerf(force){
   if(!Array.isArray(PERF))PERF=[];
   return PERF;
 }
-const zero=()=>({hits:0,unique:0,bots:0,conv:0,profit:0});
-const add=(o,r)=>{o.hits+=r.hits||0;o.unique+=r.unique||0;o.bots+=r.bots||0;o.conv+=r.conv||0;o.profit+=r.profit||0;return o};
+const zero=()=>({hits:0,unique:0,bots:0,conv:0,trash:0,profit:0,cost:0});
+const add=(o,r)=>{o.hits+=r.hits||0;o.unique+=r.unique||0;o.bots+=r.bots||0;o.conv+=r.conv||0;o.trash+=r.trash||0;o.profit+=r.profit||0;o.cost+=r.cost||0;return o};
 const perfRows=(g)=>(PERF||[]).filter(r=>r.group_id?r.group_id===g.id:r.group===(g.name||''));
 function perfOf(g,stream){const o=zero();perfRows(g).forEach(r=>{if(stream==null||r.stream===stream)add(o,r)});return o}
 
@@ -714,7 +714,8 @@ function perfTree(groups){
     let n=r.group_id?nodes.get('id:'+r.group_id):byName(r);
     if(!n){const k=r.group_id?'id:'+r.group_id:'nm:'+r.group;n=nodes.get(k);
       if(!n){n={id:r.group_id||r.group||'(unknown)',name:r.group_id?r.group:'',known:false,order:[],streams:new Map()};nodes.set(k,n);order.push(n)}}
-    n.streams.set(r.stream,add(n.streams.get(r.stream)||Object.assign(zero(),{stream:r.stream}),r));
+    const sk=(r.offer||'')+'\u0000'+r.stream;
+    n.streams.set(sk,add(n.streams.get(sk)||Object.assign(zero(),{stream:r.stream,offer:r.offer||''}),r));
   });
   return order.map(n=>{const rows=[...n.streams.values()];return {...n,rows,tot:rows.reduce(add,zero())}}).filter(n=>n.rows.length);
 }
@@ -734,10 +735,10 @@ function renderPerf(groups){
   const tree=perfSorted(groups);
   if(!tree.length){wrap.innerHTML=stateHTML('No traffic in this period');return}
   const th=(key,label,cls)=>`<th class="${cls||''} ${PSORT.k===key?'sorted':''}" data-sort="${key}">${label}${PSORT.k===key&&key!=='name'?(PSORT.d<0?' ▾':' ▴'):''}</th>`;
-  const cells=r=>`<td class="num">${fmt(r.hits)}</td><td class="num">${fmt(r.unique)}</td><td class="num ${r.bots?'warn':''}">${fmt(r.bots)}</td><td class="num ${r.conv?'ok':''}">${fmt(r.conv)}</td><td class="num">${r.profit?money(r.profit):'—'}</td><td class="num">${pct(r.conv,r.hits)}</td>`;
+  const cells=r=>`<td class="num">${fmt(r.hits)}</td><td class="num">${fmt(r.unique)}</td><td class="num ${r.bots?'warn':''}">${fmt(r.bots)}</td><td class="num ${r.conv?'ok':''}">${fmt(r.conv)}</td><td class="num ${r.trash?'warn':''}">${r.trash?fmt(r.trash):'—'}</td><td class="num">${r.cost?money(r.cost):'—'}</td><td class="num">${r.profit?money(r.profit):'—'}</td><td class="num">${pct(r.conv,r.hits)}</td>`;
   const body=tree.map(n=>`<tr class="grp ${n.known?'click':''}" data-open="${n.known?esc(n.id):''}"><td>${esc(n.id)}${n.name?` <span class="muted">${esc(n.name)}</span>`:''}${n.known?'':' <span class="pill">not in config</span>'}</td>${cells(n.tot)}</tr>`+
-    n.rows.map(r=>`<tr class="str ${n.known?'click':''}" data-open="${n.known?esc(n.id):''}"><td>${r.stream==='-'?'<i class="muted">no match → default</i>':esc(r.stream)}</td>${cells(r)}</tr>`).join('')).join('');
-  wrap.innerHTML=`<div class="tw"><table class="perft"><thead><tr>${th('name','Flow / stream')}${th('hits','Hits','num')}${th('unique','Unique','num')}${th('bots','Bots','num')}${th('conv','Conv','num')}${th('profit','Profit','num')}${th('cr','CR','num')}</tr></thead><tbody>${body}</tbody></table></div>`;
+    n.rows.map(r=>`<tr class="str ${n.known?'click':''}" data-open="${n.known?esc(n.id):''}"><td>${r.stream==='-'?'<i class="muted">no match → default</i>':esc(r.stream)}${r.offer?` <span class="pill">${esc(r.offer)}</span>`:''}</td>${cells(r)}</tr>`).join('')).join('');
+  wrap.innerHTML=`<div class="tw"><table class="perft"><thead><tr>${th('name','Flow / stream')}${th('hits','Hits','num')}${th('unique','Unique','num')}${th('bots','Bots','num')}${th('conv','Conv','num')}${th('trash','Trash','num')}${th('cost','Cost','num')}${th('profit','Profit','num')}${th('cr','CR','num')}</tr></thead><tbody>${body}</tbody></table></div>`;
   qa('th[data-sort]',wrap).forEach(h=>h.onclick=()=>{
     const key=h.dataset.sort;
     if(PSORT.k===key&&key!=='name')PSORT.d=-PSORT.d; else PSORT={k:key,d:-1};
@@ -752,10 +753,10 @@ function download(name,text,type){
 }
 function exportPerf(groups){
   const csv=s=>/[",\n]/.test(s)?'"'+String(s).replace(/"/g,'""')+'"':s;
-  const lines=[['flow','stream','hits','unique','bots','conv','profit','cr'].join(',')];
+  const lines=[['flow','stream','offer','hits','unique','bots','conv','trash','cost','profit','cr'].join(',')];
   perfSorted(groups).forEach(n=>{
-    lines.push([csv(n.id),'',n.tot.hits,n.tot.unique,n.tot.bots,n.tot.conv,n.tot.profit.toFixed(2),pct(n.tot.conv,n.tot.hits)].join(','));
-    n.rows.forEach(r=>lines.push([csv(n.id),csv(r.stream),r.hits,r.unique,r.bots,r.conv,r.profit.toFixed(2),pct(r.conv,r.hits)].join(',')));
+    lines.push([csv(n.id),'','',n.tot.hits,n.tot.unique,n.tot.bots,n.tot.conv,n.tot.trash,n.tot.cost.toFixed(2),n.tot.profit.toFixed(2),pct(n.tot.conv,n.tot.hits)].join(','));
+    n.rows.forEach(r=>lines.push([csv(n.id),csv(r.stream),csv(r.offer||''),r.hits,r.unique,r.bots,r.conv,r.cost.toFixed(2),r.profit.toFixed(2),pct(r.conv,r.hits)].join(',')));
   });
   download('kuztds-performance-'+new Date().toISOString().slice(0,10)+'.csv',lines.join('\n'),'text/csv');
 }
@@ -943,6 +944,23 @@ function dayList(days){
 }
 // Macros in an already escaped output stand out from the text around them.
 const macroHTML=(h)=>String(h).replace(/\[(?:\(\))?[A-Z][A-Z0-9_]*(?:\(\))?(?:-[^\]\s<>]*)?\]/g,'<span class="mac">$&</span>');
+// Price as collectFlow stores it: model lowercased, currency uppercased,
+// percents clamped to numbers (postback_pct defaults to 100 = all).
+function normCost(o){
+  o=o||{};
+  const num=(v,d)=>{v=+v;return Number.isFinite(v)?v:d};
+  return {model:String(o.model||'').trim().toLowerCase(),value:Math.max(0,num(o.value,0)),
+    currency:String(o.currency||'').trim().toUpperCase(),
+    payout_pct:num(o.payout_pct,0),loss_pct:num(o.loss_pct,0),
+    postback_pct:o.postback_pct===''||o.postback_pct==null?100:num(o.postback_pct,100)};
+}
+// Offers as collectFlow stores them: trimmed fields, status as a flag.
+function normOffers(list){
+  return (list||[]).map(o=>({id:String(o.id||'').trim(),name:String(o.name||'').trim(),
+    network:String(o.network||'').trim(),url:String(o.url||'').trim(),status:!!o.status,
+    payout:Math.max(0,+o.payout||0),currency:String(o.currency||'').trim().toUpperCase(),
+    cap_daily:Math.max(0,Math.floor(+o.cap_daily||0)),fallback:String(o.fallback||'').trim()}));
+}
 // ---- pure: end ----
 
 const TYPES={
@@ -951,6 +969,7 @@ const TYPES={
   javascript:['JavaScript','run a script in the page'],
   curl:['Proxy a page','fetch a URL and serve it'],
   group:['Another flow','hand the visitor on'],
+  offer:['Offer','a link from the flow offers'],
   stop:['Stop','empty response'],
   meta_refresh:['Meta refresh',''],js_redirect:['JS redirect',''],iframe_redirect:['Iframe',''],
   js_selection:['JS selection',''],iframe_selection:['Iframe selection',''],show_page_html:['HTML page',''],
@@ -1440,6 +1459,9 @@ function paintStream(){
       ${red==='group'
         ?`<div class="fld"><label>Send the visitor to flow</label>${others.length?sel('s_group','<option value="">— choose a flow —</option>'+others.map(x=>opt(x.id,x.id+(x.name?' — '+x.name:''),(o.out||'').trim())).join('')):'<div class="hint">There is no other flow yet. Create one first.</div>'}
             <div class="hint">Its streams are tried with the same visitor; the log shows the flow that finally served them.</div></div>`
+        :red==='offer'
+          ?`<div class="fld"><label>Offer</label>${(g.offers||[]).filter(x=>x.id).length?sel('s_offer','<option value="">— choose an offer —</option>'+(g.offers||[]).filter(x=>x.id).map(x=>opt(x.id,x.id+(x.name?' — '+x.name:'')+(x.status?'':' (disabled)'),(o.out||'').trim())).join('')):'<div class="hint">This flow has no offers yet. Add one in Flow settings → Offers.</div>'}
+              <div class="hint">The offer link is served for each visit and gets the same macros as a redirect.</div></div>`
         :NOOUT.has(red)?`<div class="hint">A fixed answer — there is nothing to fill in.</div>`
         :`<div class="fld"><label>${outLabel(red)}</label>${variantsField('s_outv',o.out,!URLISH.has(red),outPH(red),'s_distw')}
             <div class="hint">Macros: [KEY] [CID] [IP] [COUNTRY] [CITY] [REGION] [LANG] [DEVICE] [OPERATOR] [DOMAIN] [ASN] [ORG] [TIMEZONE] [UTC] [PAR-1..5] [PATH] [RANDNUM-a-b] [RANDLINE-(file)-n] [REMOTE]</div></div>
@@ -1664,7 +1686,7 @@ function collectStream(){
   s.comment=val('s_comment').trim();
   const red=val('s_redirect'), prev=s.out||{};
   // A field that is not on screen (the type does not use it) keeps its value.
-  s.out={redirect:red,out:red==='group'?(v('s_group')?val('s_group'):(prev.redirect==='group'?prev.out:'')):(v('s_outv')?readVariants(v('s_outv')):(prev.redirect==='group'?'':prev.out||'')),
+  s.out={redirect:red,out:red==='group'?(v('s_group')?val('s_group'):(prev.redirect==='group'?prev.out:'')):red==='offer'?(v('s_offer')?val('s_offer'):(prev.redirect==='offer'?prev.out:'')):(v('s_outv')?readVariants(v('s_outv')):(prev.redirect==='group'||prev.redirect==='offer'?'':prev.out||'')),
     chance:+val('s_chance')||0,distribution:v('s_dist')?val('s_dist'):(prev.distribution||'random'),header:val('s_header')};
   s.separation={enabled:on('sep_en'),file:val('sep_file').trim()};
   const r={};
@@ -1691,6 +1713,27 @@ function collectStream(){
 }
 
 /* ---------- flow settings (drawer) ---------- */
+const offerCard=(o,i,list)=>`<div class="card pad" data-off="${i}" style="margin-bottom:8px">
+  <div class="g2">
+    <div class="fld"><label>ID — a stream output points at it</label><input class="off-id" value="${esc(o.id||'')}" placeholder="o1" autocomplete="off"></div>
+    <div class="fld"><label>Name</label><input class="off-name" value="${esc(o.name||'')}" placeholder="for you, shown in reports" autocomplete="off"></div>
+  </div>
+  <div class="g2">
+    <div class="fld"><label>Network</label><input class="off-net" value="${esc(o.network||'')}" placeholder="partner network" autocomplete="off"></div>
+    <div class="fld"><label>Status</label><label class="chk"><input type="checkbox" class="off-on" ${o.status?'checked':''}>enabled — a disabled offer is not served and sends visits to the trash</label></div>
+  </div>
+  <div class="g2">
+    <div class="fld"><label>Payout per conversion</label><input type="number" class="off-payout" min="0" step="any" value="${o.payout||0}"></div>
+    <div class="fld"><label>Payout currency (empty = USD)</label><input class="off-cur" maxlength="3" value="${esc(o.currency||'')}" placeholder="USD" autocomplete="off"></div>
+  </div>
+  <div class="g2">
+    <div class="fld"><label>Daily purchase cap (0 = unlimited)</label><input type="number" class="off-cap" min="0" step="1" value="${o.cap_daily||0}"></div>
+    <div class="fld"><label>Fallback when the cap is reached</label><select class="off-fb"><option value="">— stop the visit (trash) —</option>${(list||[]).filter(x=>x.id&&x.id!==o.id).map(x=>`<option value="${esc(x.id)}"${x.id===o.fallback?' selected':''}>${esc(x.id+(x.name?' — '+x.name:'')+(x.status?'':' (disabled)'))}</option>`).join('')}</select></div>
+  </div>
+  <div class="fld"><label>URL — macros like [CID], [PAR-1] work</label><input class="off-url" value="${esc(o.url||'')}" placeholder="https://net.example/?cid=[CID]" autocomplete="off"></div>
+  <div class="hint">The postback's <code>profit=</code> wins; without an amount the payout is used, converted to USD with the ECB rates.</div>
+  <div class="row"><button class="sm ghost" data-offdel="${i}">${icon('trash')}Remove</button></div>
+</div>`;
 function openFlowSettings(focus){
   const g=CUR, base=(ENGINE||'').replace(/\/$/,''), fw=g.firewall||{}, others=GROUPS.filter(x=>x!==g);
   const hours=(g.uniq_seconds||86400)/3600;
@@ -1709,6 +1752,8 @@ function openFlowSettings(focus){
       </div>
       ${g.redirect==='group'
         ?`<div class="fld"><label>Send the visitor to flow</label>${sel('g_group','<option value="">— choose a flow —</option>'+others.map(x=>opt(x.id,x.id+(x.name?' — '+x.name:''),(g.out||'').trim())).join(''))}</div>`
+        :g.redirect==='offer'
+        ?`<div class="fld"><label>Offer</label>${(g.offers||[]).filter(x=>x.id).length?sel('g_offer','<option value="">— choose an offer —</option>'+(g.offers||[]).filter(x=>x.id).map(x=>opt(x.id,x.id+(x.name?' — '+x.name:'')+(x.status?'':' (disabled)'),(g.out||'').trim())).join('')):'<div class="hint">Add an offer below first.</div>'}</div>`
         :NOOUT.has(g.redirect||'stop')?`<div class="hint">A fixed answer — there is nothing to fill in.</div>`
         :`<div class="fld"><label>${outLabel(g.redirect)}</label>${variantsField('g_outv',g.out,!URLISH.has(g.redirect),outPH(g.redirect))}<div class="hint">With several variants, a random one is served.</div></div>`}
     </div>
@@ -1729,12 +1774,29 @@ function openFlowSettings(focus){
         <div class="fld"><label>Within, seconds</label><input type="number" id="fw_s" value="${fw.seconds||60}"></div>
       </div>
     </div>
+    <div class="sec"><div class="st">Price — what a visit costs</div>
+      <div class="g3">
+        <div class="fld"><label>Model</label>${sel('g_cost_model',opt('','not priced',(g.cost&&g.cost.model)||'')+['cpc','cpm','cpa','cpv','revshare'].map(m=>opt(m,m.toUpperCase(),(g.cost&&g.cost.model)||'')).join(''))}</div>
+        <div class="fld"><label>Value, in currency</label><input type="number" id="g_cost_value" min="0" step="any" value="${(g.cost&&g.cost.value)||0}"></div>
+        <div class="fld"><label>Currency (USD…)</label><input id="g_cost_cur" maxlength="3" value="${esc((g.cost&&g.cost.currency)||'')}" placeholder="USD" autocomplete="off"></div>
+      </div>
+      <div class="g3">
+        <div class="fld"><label>Revshare, % of payout</label><input type="number" id="g_cost_payout" min="0" max="100" step="any" value="${(g.cost&&g.cost.payout_pct)||0}"></div>
+        <div class="fld"><label>Traffic loss, %</label><input type="number" id="g_cost_loss" min="0" max="100" step="any" value="${(g.cost&&g.cost.loss_pct)||0}"></div>
+        <div class="fld"><label>Postbacks to source, %</label><input type="number" id="g_cost_pb" min="0" max="100" step="any" value="${(g.cost&&g.cost.postback_pct!=null)?g.cost.postback_pct:100}"></div>
+      </div>
+      <div class="hint">CPC/CPV charge per visit, CPM per thousand, CPA on conversion, Revshare takes % of the payout. Empty model = free traffic. Non-USD needs rate sync (pending).</div>
+    </div>
+    <div class="sec" id="sec-offers"><div class="st">Offers — where this flow can send visitors</div>
+      <div id="g_offers">${(g.offers||[]).map(offerCard).join('')||'<div class="hint">No offers yet. A stream output of type Offer picks one of them by ID.</div>'}</div>
+      <button id="g_off_add">${icon('plus')}Add offer</button>
+    </div>
     <div class="sec"><div class="st">Links</div>
       <dl class="kv">
         ${[g.id,...(g.aliases||[])].filter(Boolean).map(id=>`<dt>link</dt><dd><a class="mono" href="${esc(base+'/'+id)}" target="_blank" rel="noreferrer">${esc(base+'/'+id)}</a></dd>`).join('')}
         <dt>with a keyword</dt><dd><code>${esc(base+'/'+g.id+'?q=KEYWORD')}</code></dd>
         <dt>with parameters</dt><dd><code>${esc(base+'/'+g.id+'?p1=a&p2=b')}</code> → [PAR-1] [PAR-2]</dd>
-        <dt>postback</dt><dd><code>${esc(base+'/?pb=KEY&cid=[CID]&profit=1.50')}</code></dd>
+        <dt>postback</dt><dd><code>${esc(base+'/?pb=KEY&cid=[CID]&profit=1.50&status=sale')}</code></dd>
       </dl>
     </div>
     <div class="sec"><div class="st bad">Danger zone</div>
@@ -1748,6 +1810,10 @@ function openFlowSettings(focus){
     const b=q('#g_body',el), keep=b.scrollTop; b.innerHTML=paint(); b.scrollTop=keep;
     bindTags(b); bindVariants(b);
     q('#g_redirect',b).addEventListener('change',()=>setTimeout(()=>{bind()},0));
+    q('#g_off_add',b).onclick=()=>{collectFlow();g.offers=[...(g.offers||[]),{id:'',name:'',network:'',url:'',status:false}];markDirty();bind()};
+    qa('[data-offdel]',b).forEach(btn=>btn.onclick=()=>{
+      collectFlow(); g.offers=(g.offers||[]).filter((_,i)=>i!==+btn.dataset.offdel); markDirty(); bind();
+    });
     q('#g_dup',b).onclick=()=>{closeDrawer();duplicateFlow(g)};
     q('#g_del',b).onclick=()=>{closeDrawer();deleteFlow(g)};
     q('#g_clr',b).onclick=async()=>{
@@ -1769,11 +1835,20 @@ function collectFlow(){
   g.id=val('g_id').trim(); g.name=val('g_name').trim();
   g.aliases=v('g_aliases')?tagValues(v('g_aliases')):(g.aliases||[]);
   const prev=g.redirect; g.redirect=val('g_redirect'); g.header=val('g_header');
-  g.out=g.redirect==='group'?(v('g_group')?val('g_group'):(prev==='group'?g.out:'')):(v('g_outv')?readVariants(v('g_outv')):(prev==='group'?'':g.out||''));
+  g.out=g.redirect==='group'?(v('g_group')?val('g_group'):(prev==='group'?g.out:'')):g.redirect==='offer'?(v('g_offer')?val('g_offer'):(prev==='offer'?g.out:'')):(v('g_outv')?readVariants(v('g_outv')):(prev==='group'||prev==='offer'?'':g.out||''));
   g.geo=val('g_geo'); g.uniq_method=val('g_uniq');
   g.uniq_seconds=Math.max(0,Math.round((+val('g_uniqh')||0)*3600))||86400;
   g.save_keys=on('g_savekeys'); g.save_keys_se=on('g_savekeys_se');
   g.firewall={enabled:on('fw_en'),queries:+val('fw_q')||0,seconds:+val('fw_s')||0};
+  g.cost={model:val('g_cost_model').trim().toLowerCase(),value:Math.max(0,+val('g_cost_value')||0),
+    currency:val('g_cost_cur').trim().toUpperCase(),payout_pct:+val('g_cost_payout')||0,
+    loss_pct:+val('g_cost_loss')||0,postback_pct:val('g_cost_pb')==='' ? 100 : (+val('g_cost_pb')||0)};
+  g.cost=normCost(g.cost);
+  if(q('#g_offers',d))g.offers=normOffers([...d.querySelectorAll('[data-off]')].map(r=>({
+    id:q('.off-id',r).value,name:q('.off-name',r).value,
+    network:q('.off-net',r).value,url:q('.off-url',r).value,status:q('.off-on',r).checked,
+    payout:q('.off-payout',r).value,currency:q('.off-cur',r).value,
+    cap_daily:q('.off-cap',r).value,fallback:q('.off-fb',r).value})));
   // Keep the address bar and the links pointing at this flow in step with its ID.
   if(g.id&&g.id!==was){
     GROUPS.forEach(x=>{if(x.redirect==='group'&&(x.out||'').trim()===was)x.out=g.id;(x.streams||[]).forEach(s=>{if(s.out&&s.out.redirect==='group'&&(s.out.out||'').trim()===was)s.out.out=g.id})});
@@ -1852,12 +1927,12 @@ async function loadLogs(){
   LOGROWS=r.rows;
   if(!r.rows.length){wrap.innerHTML=`<div class="card">${stateHTML('Nothing matches these filters')}</div>`;q('#pageinfo').textContent='';q('#prev').disabled=logOffset===0;q('#next').disabled=true;return}
   const rows=r.rows.map((x,i)=>`<tr class="click" data-i="${i}">
-    <td>${when(x.ts)}</td><td>${esc(x.group)}</td><td>${esc(x.stream)}</td>
+    <td>${when(x.ts)}</td><td>${esc(x.group)}</td><td>${esc(x.stream)}</td><td class="mono ell">${dash(x.offer)?esc(x.offer):'<span class="subtle">—</span>'}</td>
     <td><span class="flag">${flag(x.country)}</span>${esc(x.country)}</td><td>${esc(x.device)}</td>
     <td>${esc(x.os)} ${esc(x.browser)}</td><td>${esc(x.brand)}</td>
     <td>${x.bot&&x.bot!=='-'?`<span class="pill warn">${esc(x.bot)}</span>`:(x.uniq?'<span class="pill ok">unique</span>':'<span class="pill">repeat</span>')}</td>
     <td class="mono">${esc(x.ip)}</td><td class="ell">${esc(x.keyword)}</td><td class="ell mono">${esc(x.out)}</td></tr>`).join('');
-  wrap.innerHTML=`<div class="tw"><table><thead><tr><th>Time</th><th>Flow</th><th>Stream</th><th>Country</th><th>Device</th><th>OS / browser</th><th>Brand</th><th>Visit</th><th>IP</th><th>Keyword</th><th>Output</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  wrap.innerHTML=`<div class="tw"><table><thead><tr><th>Time</th><th>Flow</th><th>Stream</th><th>Offer</th><th>Country</th><th>Device</th><th>OS / browser</th><th>Brand</th><th>Visit</th><th>IP</th><th>Keyword</th><th>Output</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   qa('tr[data-i]',wrap).forEach(tr=>tr.onclick=()=>logDetail(LOGROWS[+tr.dataset.i]));
   q('#pageinfo').textContent=`${fmt(logOffset+1)}–${fmt(logOffset+r.rows.length)} of ${fmt(r.total)}`;
   q('#prev').disabled=logOffset===0;
@@ -1868,7 +1943,7 @@ function logDetail(x){
   const el=$(`<aside class="drawer"><div class="dh"><span class="t grow">Visit · ${when(x.ts)}</span><button class="icon ghost" data-x>${icon('x')}</button></div>
     <div class="db">
       <div class="sec"><div class="st">Routing</div><dl class="kv">
-        ${row('Flow',x.group)}${row('Stream',x.stream==='-'?'default (no stream matched)':x.stream)}${row('Type',typeLabel(x.redirect))}${row('Output',x.out,1)}
+        ${row('Flow',x.group)}${row('Stream',x.stream==='-'?'default (no stream matched)':x.stream)}${row('Offer',x.offer)}${row('Type',typeLabel(x.redirect))}${row('Output',x.out,1)}
         <dt>Visit</dt><dd>${x.bot&&x.bot!=='-'?'bot: '+esc(x.bot):(x.uniq?'unique':'repeat')}</dd>${row('Click ID',x.cid,1)}</dl></div>
       <div class="sec"><div class="st">Where from</div><dl class="kv">
         <dt>IP</dt><dd class="mono">${esc(x.ip)} <a href="#/tools/${encodeURIComponent(x.ip)}">look up</a></dd>
@@ -1898,10 +1973,10 @@ async function loadPostbacks(){
   const r=await get('/api/postbacks?'+rangeQS()+(g?'&group='+encodeURIComponent(g):''),null);
   const wrap=q('#pb-wrap'); if(!wrap)return;
   if(!r||!r.rows){wrap.innerHTML=stateHTML('Conversions are not available — is ClickHouse connected?','err');return}
-  q('#pb-total').innerHTML=`${fmt(r.rows.length)} conversion${r.rows.length===1?'':'s'} · profit <b class="ok">${money(r.total)}</b>`;
+  q('#pb-total').innerHTML=`${fmt(r.rows.length)} conversion${r.rows.length===1?'':'s'} · profit <b class="ok">${money(r.total)}</b>${r.trash?` · trash <b>${money(r.trash)}</b>`:''}`;
   if(!r.rows.length){wrap.innerHTML=`<div class="card">${stateHTML('No conversions in this period')}</div>`;return}
-  wrap.innerHTML=`<div class="tw"><table><thead><tr><th>Time</th><th>Flow</th><th>Stream</th><th>Source</th><th>Device</th><th>Country</th><th>City</th><th class="num">Profit</th><th>Click ID</th></tr></thead><tbody>${
-    r.rows.map(x=>`<tr><td>${when(x.ts)}</td><td>${esc(x.group)}</td><td>${esc(x.stream)}</td><td class="ell">${esc(x.domain)}</td><td>${esc(x.device)}</td><td><span class="flag">${flag(x.country)}</span>${esc(x.country)}</td><td>${esc(x.city)}</td><td class="num ok">${money(x.profit)}</td><td class="mono">${esc(x.cid)}</td></tr>`).join('')}</tbody></table></div>`;
+  wrap.innerHTML=`<div class="tw"><table><thead><tr><th>Time</th><th>Flow</th><th>Stream</th><th>Offer</th><th>Status</th><th>Source</th><th>Device</th><th>Country</th><th>City</th><th class="num">Profit</th><th class="num">Cost</th><th>Click ID</th><th>Txn</th></tr></thead><tbody>${
+    r.rows.map(x=>`<tr><td>${when(x.ts)}</td><td>${esc(x.group)}</td><td>${esc(x.stream)}</td><td class="mono">${dash(x.offer)?esc(x.offer):'—'}</td><td>${esc(x.status||'')}</td><td class="ell">${esc(x.domain)}</td><td>${esc(x.device)}</td><td><span class="flag">${flag(x.country)}</span>${esc(x.country)}</td><td>${esc(x.city)}</td><td class="num ok">${money(x.profit)}</td><td class="num">${x.cost?money(x.cost):'—'}</td><td class="mono">${esc(x.cid)}</td><td class="mono">${esc(x.tid||'')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 /* ---------- KEYWORDS ---------- */
@@ -1992,6 +2067,7 @@ const JOBINFO={
   disk:['Disk space','Warn when the disk is nearly full — a full disk stops lists and logs from being written.'],
   cleanup:['Keyword cleanup','Delete collected keyword files after a number of days.'],
   conversions:['Conversion alerts','Send every new conversion to Telegram.'],
+  rates:['Currency rates','Download the ECB reference rates so campaigns priced in EUR, GBP and others count in USD.'],
 };
 const getPath=(o,p)=>p.split('.').reduce((a,k)=>a==null?a:a[k],o);
 function setPath(o,p,v){const ks=p.split('.'),last=ks.pop();const t=ks.reduce((a,k)=>a[k],o);t[last]=v}
@@ -2045,6 +2121,8 @@ function jobBody(job){
       <div class="hint">Visits in the log expire on their own (ClickHouse TTL).</div>`;
     case 'conversions':return `<div class="fld"><label>Message</label>${inp('conversions.template','class="mono"')}
       <div class="hint">[PROFIT] [GROUP] [STREAM] [COUNTRY] [CITY] [DEVICE] [DOMAIN] [CID]. The cron service needs the ClickHouse connection.</div></div>`;
+    case 'rates':return `<div class="fld"><label>Feed URL</label>${inp('rates.url','class="mono" placeholder="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"')}
+      <div class="hint">Reference rates against EUR, rebased to USD per unit and written to <code>rates.json</code> in the data directory. The engine re-reads it without a restart. A failed download keeps yesterday's rates.</div></div>`;
   }
   return '';
 }

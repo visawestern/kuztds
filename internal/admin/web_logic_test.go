@@ -142,5 +142,20 @@ eq(macroHTML('go [KEY] &amp; [PAR-1] [RANDNUM-1-9] [()COUNTRY()]'),
   'go <span class="mac">[KEY]</span> &amp; <span class="mac">[PAR-1]</span> <span class="mac">[RANDNUM-1-9]</span> <span class="mac">[()COUNTRY()]</span>', 'macros');
 eq(macroHTML('[&quot;a&quot;] [lower] [1]'), '[&quot;a&quot;] [lower] [1]', 'not macros');
 
+// Price normalization (collectFlow stores through normCost).
+eq(normCost({model:'CPC',value:'0.05',currency:' usd ',payout_pct:'',loss_pct:'',postback_pct:''}),
+  {model:'cpc',value:0.05,currency:'USD',payout_pct:0,loss_pct:0,postback_pct:100}, 'price as typed');
+eq(normCost({model:'',value:0,currency:'',postback_pct:0}),
+  {model:'',value:0,currency:'',payout_pct:0,loss_pct:0,postback_pct:0}, 'cleared postback % stays 0, not reset to 100');
+eq(normCost(null),
+  {model:'',value:0,currency:'',payout_pct:0,loss_pct:0,postback_pct:100}, 'no price');
+
+// Offers as collectFlow stores them (G-048).
+eq(normOffers([{id:' o1 ',name:' Main ',network:' net ',url:' https://x ',status:1,payout:'1.5',currency:' eur ',cap_daily:'3',fallback:' o2 '}]),
+  [{id:'o1',name:'Main',network:'net',url:'https://x',status:true,payout:1.5,currency:'EUR',cap_daily:3,fallback:'o2'}], 'offers are trimmed');
+eq(normOffers([{id:'o1',payout:'-2',currency:'',cap_daily:'-1'}]),
+  [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:''}], 'negative payout and cap clamp to 0');
+eq(normOffers(null), [], 'no offers');
+
 if (failed) { console.log(failed + ' check(s) failed'); process.exit(1); }
 `

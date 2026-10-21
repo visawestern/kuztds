@@ -59,7 +59,8 @@ func TestCHRoundTrip(t *testing.T) {
 	events := []logbuf.Event{
 		{Ts: now, GroupID: group, GroupName: group, Stream: "s1", Out: "o1",
 			Device: "phone", Country: "ru", City: "moscow", OS: "Android", Browser: "Chrome",
-			Brand: "Samsung", Uniq: 1, IP: "1.2.3.4", CID: "cid_a", Keyword: "kw"},
+			Brand: "Samsung", Uniq: 1, IP: "1.2.3.4", CID: "cid_a", Keyword: "kw",
+			Cost: 0.5, CostCur: "USD"},
 		{Ts: now, GroupID: group, GroupName: group, Stream: "s1", Out: "o2",
 			Device: "computer", Country: "us", Uniq: 0, IP: "5.6.7.8", CID: "cid_b"},
 		{Ts: now, GroupID: group, GroupName: group, Stream: "s2", Out: "o3",
@@ -133,24 +134,31 @@ func TestCHRoundTrip(t *testing.T) {
 	}
 
 	// Postback for cid_a.
-	if err := ch.RecordPostback(ctx, "cid_a", 2.5); err != nil {
+	if err := ch.RecordPostback(ctx, "cid_a", 2.5, "sale", "", 3.0); err != nil {
 		t.Fatalf("RecordPostback: %v", err)
 	}
+	// Trash postback for cid_b: excluded from Revenue, kept in Revenue (trash).
+	if err := ch.RecordPostback(ctx, "cid_b", 10.0, "trash", "t-9", 0); err != nil {
+		t.Fatalf("RecordPostback trash: %v", err)
+	}
 	// nonexistent cid → error.
-	if err := ch.RecordPostback(ctx, "nope_cid", 1.0); err == nil {
+	if err := ch.RecordPostback(ctx, "nope_cid", 1.0, "sale", "", 0); err == nil {
 		t.Error("RecordPostback for an unknown cid must return an error")
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	pb, profit, err := ch.Postbacks(ctx, from, to, group, 100)
+	pb, profit, trash, err := ch.Postbacks(ctx, from, to, group, 100)
 	if err != nil {
 		t.Fatalf("Postbacks: %v", err)
 	}
-	if len(pb) != 1 || profit != 2.5 {
-		t.Errorf("Postbacks: rows=%d profit=%v, expected 1 row and 2.5", len(pb), profit)
+	if len(pb) != 2 || profit != 2.5 || trash != 10.0 {
+		t.Errorf("Postbacks: rows=%d profit=%v trash=%v, expected 2 rows, 2.5 and 10.0", len(pb), profit, trash)
 	}
 	if len(pb) == 1 && pb[0].CID != "cid_a" {
 		t.Errorf("Postback cid = %q, expected cid_a", pb[0].CID)
+	}
+	if len(pb) == 1 && pb[0].Status != "sale" {
+		t.Errorf("Postback status = %q, expected sale", pb[0].Status)
 	}
 
 	// The network columns exist after ensureSchema and round-trip through Logs.
@@ -180,8 +188,9 @@ func TestCHRoundTrip(t *testing.T) {
 		t.Errorf("Breakdown by asn: %v, %v", kv, err)
 	}
 
-	// Performance: s1 = 2 own hits + 1 forwarded / 2 unique / 0 bots / 1
-	// conversion of 2.5; s2 = 1 hit, a bot, no conversions.
+	// Performance: s1 = 2 own hits + 1 forwarded / 2 unique / 0 bots / cost 3.5
+	// (0.5 click + 3.0 conversion) / 2 conversions of net -1.0 (2.5 revenue,
+	// 1 trash of 10.0 on top); s2 = 1 hit, a bot, no conversions.
 	perf, err := ch.Performance(ctx, from, to)
 	if err != nil {
 		t.Fatalf("Performance: %v", err)
@@ -192,8 +201,8 @@ func TestCHRoundTrip(t *testing.T) {
 			got[p.Stream] = p
 		}
 	}
-	if s1 := got["s1"]; s1.Hits != 3 || s1.Forwarded != 1 || s1.Unique != 2 || s1.Bots != 0 || s1.Conv != 1 || s1.Profit != 2.5 {
-		t.Errorf("Performance s1 = %+v, expected 3 hits (1 forwarded) / 2 unique / 0 bots, 1 conv of 2.5", s1)
+	if s1 := got["s1"]; s1.Hits != 3 || s1.Forwarded != 1 || s1.Unique != 2 || s1.Bots != 0 || s1.Conv != 2 || s1.Cost != 3.5 || s1.Profit != -1.0 || s1.Trash != 1 || s1.TrashProfit != 10.0 {
+		t.Errorf("Performance s1 = %+v, expected 3 hits (1 forwarded) / 2 unique / 0 bots, cost 3.5 (0.5 click + 3.0 conv), net -1.0 + 1 trash of 10.0", s1)
 	}
 	if s2 := got["s2"]; s2.Hits != 1 || s2.Bots != 1 || s2.Conv != 0 {
 		t.Errorf("Performance s2 = %+v, expected 1 hit, 1 bot, 0 conv", s2)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/egerkuzma/kuztds/internal/config"
+	"github.com/egerkuzma/kuztds/internal/cost"
 	"github.com/egerkuzma/kuztds/internal/detect"
 	"github.com/egerkuzma/kuztds/internal/fetch"
 	"github.com/egerkuzma/kuztds/internal/geo"
@@ -35,6 +36,7 @@ type engineDeps struct {
 	groups       *config.Groups
 	logs         *logbuf.Buffer
 	chConn       *store.CH
+	rates        *ratesStore
 	fetcher      *fetch.Client
 	dataDir      string
 	keysDir      string
@@ -115,15 +117,48 @@ func hitPercent(p int) bool {
 // uniqueness → router → bots → separation/remote/chance → distribution →
 // render → async log → key collection.
 func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
-	// Postback pixel: ?pb=KEY&cid=<id;cid>&profit=X.
+	// Postback pixel: ?pb=KEY&cid=<id>&profit=X&status=<status>&tid=<txn>.
+	// Без валидного status= конверсия игнорируется (паритет Keitaro 11),
+	// ответ всё равно 200.
 	if pb := r.URL.Query().Get("pb"); pb != "" {
 		if d.postbackKey != "" && pb == d.postbackKey && d.chConn != nil {
-			cid := r.URL.Query().Get("cid")
-			profit, _ := strconv.ParseFloat(r.URL.Query().Get("profit"), 64)
-			if cid != "" {
-				if err := d.chConn.RecordPostback(r.Context(), cid, profit); err != nil {
-					d.log.Warn("postback failed", "cid", cid, "err", err)
+			if pbd, ok := parsePostback(r.URL.Query()); ok {
+				// Conversion cost by the entry campaign's model (G-120) and the
+				// offer payout when the postback carries no amount (G-049).
+				// Best effort: pricing must never block the conversion itself.
+				profit := pbd.Profit
+				convCost := 0.0
+				offer := ""
+				if gid, gerr := d.chConn.EventGroupID(r.Context(), pbd.CID); gerr == nil && d.groups != nil {
+					if grp, found := d.groups.Get(gid); found {
+						if offID, oerr := d.chConn.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
+							offer = offID
+							if p, priced := effectiveProfit(pbd.Profit, pbd.HasProfit, *grp, offID, d.rates.Rates()); priced {
+								profit = p
+							} else {
+								d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
+							}
+							// G-050: a purchase spends one slot of the offer's day.
+							// trash is a reversal, not a purchase.
+							if pbd.Status != "trash" && d.counters != nil {
+								if cerr := d.counters.CountConversion(r.Context(), gid, offID, time.Now()); cerr != nil {
+									d.log.Debug("engine: offer cap not counted", "offer", offID, "err", cerr)
+								}
+							}
+						}
+						m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
+						if cc, ok := cost.ForConversionStatusUSD(m, pbd.Status, profit, d.rates.Rates()); ok {
+							convCost = cc
+						} else {
+							d.log.Debug("engine: conversion cost skipped (no rates for currency)", "currency", grp.Cost.Currency)
+						}
+					}
 				}
+				if err := d.chConn.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost); err != nil {
+					d.log.Warn("postback failed", "cid", pbd.CID, "status", pbd.Status, "err", err)
+				}
+			} else {
+				d.log.Warn("postback ignored", "query", r.URL.RawQuery)
 			}
 		}
 		w.WriteHeader(http.StatusOK)
@@ -286,7 +321,8 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 	var (
 		streamName, redirect, outRaw, ctype string
 		selStream                           *config.Stream
-		via                                 string // the first link followed: "<group id>/<stream>"
+		via                                 string     // the first link followed: "<group id>/<stream>"
+		entryCost                           = grp.Cost // money belongs to the entry campaign (G-119)
 	)
 	for hop := 0; ; hop++ {
 		deps := router.Deps{IP: d.lists}
@@ -368,6 +404,42 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// offer: a stream (or a group default) of type "offer" sends the visitor to
+	// a campaign offer (G-048). The URL then goes through the normal macro and
+	// distribution path as an ordinary redirect. A missing or disabled offer is
+	// a configuration error and gets the trash answer, like a broken group link.
+	offerID := ""
+	if redirect == "offer" {
+		off, ok := grp.Offer(outRaw)
+		if !ok || !off.Status {
+			d.log.Warn("engine: offer not served", "group", grp.ID, "stream", streamName, "offer", strings.TrimSpace(outRaw))
+			trashResult(d.trashMode, d.trashURL).Write(w)
+			return
+		}
+		// G-050: a daily purchase cap moves the visit to the fallback offer.
+		// Without one the visit gets the trash answer; Redis being down must
+		// not stop the traffic.
+		if off.CapDaily > 0 && d.counters != nil {
+			reached, cerr := d.counters.OfferCapReached(r.Context(), grp.ID, off.ID, off.CapDaily, time.Now())
+			switch {
+			case cerr != nil:
+				d.log.Warn("engine: offer cap unavailable, serving anyway", "offer", off.ID, "err", cerr)
+			case reached:
+				if fb, fok := grp.Offer(off.Fallback); fok && fb.Status && fb.ID != off.ID {
+					d.log.Debug("engine: offer cap reached, fallback", "offer", off.ID, "fallback", fb.ID)
+					off = fb
+				} else {
+					d.log.Warn("engine: offer cap reached, no fallback", "group", grp.ID, "offer", off.ID)
+					trashResult(d.trashMode, d.trashURL).Write(w)
+					return
+				}
+			}
+		}
+		offerID = off.ID
+		outRaw = off.URL
+		redirect = "http_redirect"
+	}
+
 	// chance: for javascript/js_selection — show with probability chance %.
 	// Here chance 0 means "not configured", so only a real 1..99 gates the
 	// output; the draw itself goes through hitPercent, which carries the
@@ -443,6 +515,19 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 
 	// 6) Event log — asynchronous, the response does not wait for the write (phase 4).
 	if d.logs != nil {
+		// Click cost by the entry campaign's model (G-119…G-121). The value is
+		// normalized to USD, so cost_cur says USD; a currency without a rate is
+		// honestly 0 + debug rather than a guess.
+		clickCost, costOK := cost.ForClickPaidUSD(cost.Model{
+			Kind: entryCost.Model, Value: entryCost.Value, Currency: entryCost.Currency,
+			LossPct: entryCost.LossPct,
+		}, d.rates.Rates())
+		costCur := ""
+		if costOK && clickCost != 0 {
+			costCur = "USD"
+		} else if !costOK {
+			d.log.Debug("engine: cost skipped (no rates for currency)", "currency", entryCost.Currency)
+		}
 		d.logs.Push(logbuf.Event{
 			Ts: time.Now(), GroupID: grp.ID, GroupName: grp.Name,
 			Stream: streamName, Out: out, Redirect: logRedirect, Device: device,
@@ -452,6 +537,7 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 			OS: info.OS, OSVersion: info.OSVersion, Browser: info.Browser,
 			BrowserV: info.BrowserVer, Brand: info.Brand, CID: cid,
 			ASN: g.ASN, Org: dashEmpty(g.Org), Timezone: dashEmpty(g.Timezone), Via: via,
+			Cost: clickCost, CostCur: costCur, Offer: offerID,
 		})
 	}
 

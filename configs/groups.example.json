@@ -17,6 +17,49 @@
       "queries": 100,
       "seconds": 60
     },
+    "cost": {
+      "model": "cpc",
+      "value": 0.05,
+      "currency": "USD",
+      "payout_pct": 0,
+      "loss_pct": 0,
+      "postback_pct": 100
+    },
+    "offers": [
+      {
+        "id": "o1",
+        "name": "Main GEO",
+        "network": "adnetwork",
+        "url": "https://track.adnetwork.example/click?cid=[CID]\u0026sub=[PAR-1]\u0026country=[COUNTRY]",
+        "status": true,
+        "payout": 1.5,
+        "currency": "EUR",
+        "cap_daily": 10,
+        "fallback": "backup"
+      },
+      {
+        "id": "backup",
+        "name": "Backup GEO",
+        "network": "adnetwork",
+        "url": "https://track.adnetwork.example/click?cid=[CID]\u0026geo=2",
+        "status": true,
+        "payout": 1.2,
+        "currency": "USD",
+        "cap_daily": 0,
+        "fallback": ""
+      },
+      {
+        "id": "draft",
+        "name": "Backup (not ready)",
+        "network": "",
+        "url": "",
+        "status": false,
+        "payout": 0,
+        "currency": "",
+        "cap_daily": 0,
+        "fallback": ""
+      }
+    ],
     "save_keys": true,
     "save_keys_se": true,
     "streams": [

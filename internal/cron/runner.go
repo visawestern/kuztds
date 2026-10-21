@@ -107,7 +107,7 @@ func known(job string) bool {
 
 // PostbackSource is the part of the statistics store the conversions job uses.
 type PostbackSource interface {
-	Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]store.PostbackRow, float64, error)
+	Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]store.PostbackRow, float64, float64, error)
 }
 
 // Runner executes the jobs on schedule.
@@ -320,6 +320,8 @@ func (r *Runner) exec(ctx context.Context, cfg Config, job string) (msg string, 
 		return r.runCleanup(cfg.Cleanup)
 	case JobConversions:
 		return r.runConversions(ctx, cfg)
+	case JobRates:
+		return r.runRates(ctx, cfg.Rates)
 	case JobTelegramTest:
 		if !cfg.Telegram.Configured() {
 			return "", errors.New("telegram is not configured: set the bot token and the chat id")

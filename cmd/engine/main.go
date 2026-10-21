@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -153,6 +154,12 @@ func main() {
 		go newGroupsWatcher(groupsFile, groups, lists, seps, log, known).watch(ctx, reload)
 	}
 
+	// ECB rates (G-121): written by cron into the shared data directory,
+	// re-read on the same reload tick so a campaign in EUR starts pricing as
+	// soon as the first sync lands.
+	rates := newRatesStore(getenv("KUZTDS_RATES_FILE", filepath.Join(dataDir, "rates.json")), log)
+	go rates.watch(ctx, reload)
+
 	// ClickHouse logs (phase 4): asynchronous batch writes. Optional.
 	var logs *logbuf.Buffer
 	var chConn *store.CH
@@ -178,7 +185,7 @@ func main() {
 
 	d := &engineDeps{
 		log: log, lists: lists, sigs: sigs, seps: seps, geores: geores, counters: counters,
-		groups: groups, logs: logs, chConn: chConn, fetcher: fetcher,
+		groups: groups, logs: logs, chConn: chConn, rates: rates, fetcher: fetcher,
 		dataDir: dataDir, keysDir: keysDir, postbackKey: postbackKey, apiKey: apiKey,
 		trashMode: trashMode, trashURL: trashURL, curlCacheMin: curlCacheMin,
 	}

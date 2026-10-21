@@ -582,7 +582,7 @@ type fakePB struct {
 	err      error
 }
 
-func (f *fakePB) Postbacks(_ context.Context, from, to time.Time, _ string, _ int) ([]store.PostbackRow, float64, error) {
+func (f *fakePB) Postbacks(_ context.Context, from, to time.Time, _ string, _ int) ([]store.PostbackRow, float64, float64, error) {
 	f.from, f.to = from, to
 	var out []store.PostbackRow
 	for _, r := range f.rows {
@@ -590,7 +590,7 @@ func (f *fakePB) Postbacks(_ context.Context, from, to time.Time, _ string, _ in
 			out = append(out, r)
 		}
 	}
-	return out, 0, f.err
+	return out, 0, 0, f.err
 }
 
 func TestConversions(t *testing.T) {

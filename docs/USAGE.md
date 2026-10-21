@@ -118,7 +118,7 @@ the uniqueness cookie the client sets, `ztu` by default).
 - Group: `http://host/<id>` (and aliases `http://host/<alias>`)
 - With a keyword: `http://host/<id>?q=KEYWORD`
 - With extra params: `http://host/<id>?p1=...&p2=...` → macros `[PAR-1..5]`
-- Postback pixel: `http://host/?pb=KEY&cid=[CID]&profit=1.50`
+- Postback pixel: `http://host/?pb=KEY&cid=[CID]&profit=1.50&status=sale` (`status` required; optional `&tid=` transaction id)
 - Any query-string variable can be a stream condition ("URL parameter":
   `utm_source=fb`, or just `sub1` for "present").
 
@@ -245,6 +245,7 @@ settings, interval, the last result with its time, and **Run now**.
 | Disk space | Alerts when free space drops below the threshold, and once more when it recovers |
 | Keyword cleanup | Deletes keyword files older than N days |
 | Conversion alerts | Sends each new postback to Telegram by a template (`[PROFIT] [GROUP] [STREAM] [COUNTRY] [CITY] [DEVICE] [DOMAIN] [CID]`) |
+| Currency rates | Downloads the ECB daily reference rates, rebases them to USD per unit and writes `rates.json` into the data directory. The engine re-reads it on its reload tick, so campaigns priced in EUR/GBP/… stop counting as zero. A failed download keeps yesterday's rates |
 
 Telegram (bot token + chat ID) is the notification channel, with a **Send a
 test** button. Secrets are never sent back to the browser: a stored token or
@@ -278,6 +279,61 @@ api_mac, curl}`.
   ticker (1 min by default), so edits from the UI and edits made to the file
   directly both go live without a restart. A file that fails to parse — or goes
   missing — is skipped and retried, leaving the running config in place.
+
+### Price of traffic
+
+A group may carry `cost` — what a visit costs. `model` is `cpc`, `cpm`
+(per thousand), `cpv` (per visit), `cpa` (charged on a conversion) or
+`revshare` (a share of the payout: `payout_pct`); an empty model means free
+traffic. `value` is in `currency`; values are converted to USD with the ECB
+rates the **Currency rates** job writes (`rates.json` in the data directory,
+read by the engine on its reload tick). A currency without a rate is not
+guessed: the cost stays 0 and a debug line says why.
+
+`loss_pct` follows Binom v2: `new CPC = CPC / (1 - loss/100)` — the source
+charges for traffic lost on the way, so a delivered click costs more. It must
+be below 100. `postback_pct` is stored for outbound S2S postbacks (not sent
+yet). Cost lives on the entry campaign and is recorded per event; performance
+shows Cost and net Profit = revenue − cost.
+
+### Offers
+
+A group may carry `offers` — its partner offers, each with `id`, `name`,
+`network`, `url` and `status`. A stream (or the group default) of type
+`offer` names one by id: `"redirect": "offer", "out": "o1"`. The engine then
+serves that offer's URL exactly like an HTTP redirect, with all output macros
+expanded. `name` and `network` are for you and for reports; `id` is what a
+stream points at.
+
+A disabled offer is a draft: its link may be empty, and a visit routed to it
+gets the trash answer — the same for a missing id. Offers live in Flow
+settings → Offers; the admin refuses to save an enabled offer without an
+http(s) URL or with a duplicate id. The served offer is written to every
+visit: column **Offer** in the log and in the CSV export.
+
+An offer also carries a `payout` — the revenue of one conversion — and its
+`currency` (ISO 4217, empty = USD). A conversion's `profit=` from the postback
+always wins, and an explicit zero stays zero. When the message carries no
+amount, the served offer's payout is used, converted to USD with the ECB
+rates. A currency without a rate is not guessed: revenue stays 0 and a debug
+line says why. The admin rejects a negative payout or a malformed currency
+code.
+
+An offer may also carry `cap_daily` — how many purchases it accepts per UTC
+day (0 = unlimited) — and `fallback`, another enabled offer of the same flow.
+When the day's cap is spent, a visit routed to the offer is served the
+fallback instead, so the traffic keeps flowing; without a fallback the visit
+gets the trash answer. A purchase is counted when the postback is accepted
+(a `trash` reversal does not spend a slot). The counter lives in Redis, keyed
+by flow, offer and UTC date and expiring with the day; if Redis is unreachable
+the engine serves the offer rather than blocking traffic. The fallback itself
+is served without a cap check, so two offers cannot loop.
+
+Performance rows (and the performance CSV, now with an `offer` column) split a
+stream by offer: a row shows the visits sent to that offer, the click cost
+spent on them, the conversions with their revenue, and net Profit = revenue −
+click cost − conversion cost. A visit that never reached an offer keeps an
+empty offer cell, exactly as before.
 
 ## Output macros
 

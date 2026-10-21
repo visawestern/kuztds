@@ -20,6 +20,16 @@ type CH struct {
 	// both consult this rather than assume — an INSERT naming a column that is
 	// not there fails as a whole, and that would cost every event.
 	netCols bool
+	// postbackCols: postbacks has status/tid/cost (migrations 004/006). Same rule:
+	// fresh containers get them from /docker-entrypoint-initdb.d, older ones
+	// from the ALTER below; a refused ALTER keeps the legacy column set.
+	postbackCols bool
+	// eventCostCols: events has cost/cost_cur (migration 005). Same rule.
+	eventCostCols bool
+	// eventOfferCols: events has offer (migration 007). Same rule.
+	eventOfferCols bool
+	// postbackOfferCols: postbacks has offer (migration 008). Same rule.
+	postbackOfferCols bool
 }
 
 // OpenCH opens a connection to ClickHouse.
@@ -61,7 +71,41 @@ func (c *CH) ensureSchema(ctx context.Context) {
 		WHERE database = currentDatabase() AND table = 'events'
 		  AND name IN ('asn', 'org', 'timezone', 'via')`).Scan(&n)
 	c.netCols = err == nil && n == 4
+	_ = c.conn.Exec(ctx, `ALTER TABLE postbacks
+		ADD COLUMN IF NOT EXISTS status LowCardinality(String),
+		ADD COLUMN IF NOT EXISTS tid String,
+		ADD COLUMN IF NOT EXISTS cost Float64`)
+	var m uint64
+	merr := c.conn.QueryRow(ctx, `SELECT count() FROM system.columns
+		WHERE database = currentDatabase() AND table = 'postbacks'
+		  AND name IN ('status', 'tid', 'cost')`).Scan(&m)
+	c.postbackCols = merr == nil && m == 3
+	_ = c.conn.Exec(ctx, `ALTER TABLE events
+		ADD COLUMN IF NOT EXISTS cost Float64,
+		ADD COLUMN IF NOT EXISTS cost_cur LowCardinality(String)`)
+	var k uint64
+	kerr := c.conn.QueryRow(ctx, `SELECT count() FROM system.columns
+		WHERE database = currentDatabase() AND table = 'events'
+		  AND name IN ('cost', 'cost_cur')`).Scan(&k)
+	c.eventCostCols = kerr == nil && k == 2
+	if aerr := c.conn.Exec(ctx, `ALTER TABLE events ADD COLUMN IF NOT EXISTS offer String`); aerr == nil {
+		var n uint64
+		if qerr := c.conn.QueryRow(ctx, `SELECT count() FROM system.columns
+			WHERE database = currentDatabase() AND table = 'events' AND name = 'offer'`).Scan(&n); qerr == nil {
+			c.eventOfferCols = n == 1
+		}
+	}
+	if aerr := c.conn.Exec(ctx, `ALTER TABLE postbacks ADD COLUMN IF NOT EXISTS offer String`); aerr == nil {
+		var n uint64
+		if qerr := c.conn.QueryRow(ctx, `SELECT count() FROM system.columns
+			WHERE database = currentDatabase() AND table = 'postbacks' AND name = 'offer'`).Scan(&n); qerr == nil {
+			c.postbackOfferCols = n == 1
+		}
+	}
 }
+
+// PostbackColumns reports whether postbacks carry status/tid.
+func (c *CH) PostbackColumns() bool { return c != nil && c.postbackCols }
 
 // NetworkColumns reports whether events carry asn/org/timezone/via.
 func (c *CH) NetworkColumns() bool { return c != nil && c.netCols }
@@ -173,11 +217,19 @@ type PerfRow struct {
 	GroupID string  `json:"group_id"`
 	Group   string  `json:"group"`
 	Stream  string  `json:"stream"`
+	Offer   string  `json:"offer"`
 	Hits    int64   `json:"hits"`
 	Unique  int64   `json:"unique"`
 	Bots    int64   `json:"bots"`
 	Conv    int64   `json:"conv"`
 	Profit  float64 `json:"profit"`
+	// Cost — USD spend on the visits (sum of events.cost, G-119).
+	// Profit is net: postback revenue minus cost (0 cost = legacy numbers).
+	Cost float64 `json:"cost"`
+	// Trash/TrashProfit — conversions with status=trash: counted in Conv
+	// but excluded from Profit (their amount rides here instead).
+	Trash       int64   `json:"trash"`
+	TrashProfit float64 `json:"trash_profit"`
 	// Forwarded — visits this stream handed to another group (type "group").
 	// They are logged under the group that served them; here they are added
 	// to Hits/Unique/Bots of the stream that sent them on, so a flow's
@@ -192,28 +244,36 @@ type PerfRow struct {
 // ordered by hits, descending; a stream with conversions but no events in
 // the window still appears, with zero hits.
 func (c *CH) Performance(ctx context.Context, from, to time.Time) ([]PerfRow, error) {
+	costSel := "0 AS cost"
+	if c.eventCostCols {
+		costSel = "sum(cost) AS cost"
+	}
+	offerSel := "'' AS offer"
+	if c.eventOfferCols {
+		offerSel = "offer"
+	}
 	rows, err := c.conn.Query(ctx,
-		`SELECT group_id, group_name, stream_name,
+		`SELECT group_id, group_name, stream_name, `+offerSel+`,
 		        count() AS hits, countIf(uniq = 1) AS uniq,
-		        countIf(bot != '' AND bot != '-') AS bots
+		        countIf(bot != '' AND bot != '-') AS bots, `+costSel+`
 		 FROM events WHERE ts >= ? AND ts < ?
-		 GROUP BY group_id, group_name, stream_name
+		 GROUP BY group_id, group_name, stream_name, offer
 		 ORDER BY hits DESC LIMIT 2000`, from, to)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	type key struct{ group, stream string }
+	type key struct{ group, stream, offer string }
 	var out []PerfRow
 	index := map[key]int{}
 	for rows.Next() {
 		var p PerfRow
 		var hits, uniq, bots uint64
-		if err := rows.Scan(&p.GroupID, &p.Group, &p.Stream, &hits, &uniq, &bots); err != nil {
+		if err := rows.Scan(&p.GroupID, &p.Group, &p.Stream, &p.Offer, &hits, &uniq, &bots, &p.Cost); err != nil {
 			return nil, err
 		}
 		p.Hits, p.Unique, p.Bots = int64(hits), int64(uniq), int64(bots)
-		index[key{p.Group, p.Stream}] = len(out)
+		index[key{p.Group, p.Stream, p.Offer}] = len(out)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -224,28 +284,35 @@ func (c *CH) Performance(ctx context.Context, from, to time.Time) ([]PerfRow, er
 			return nil, err
 		}
 	}
+	pbOfferSel := "'' AS offer"
+	if c.postbackOfferCols {
+		pbOfferSel = "offer"
+	}
 	pbs, err := c.conn.Query(ctx,
-		`SELECT group_name, stream_name, count() AS conv, sum(profit) AS profit
+		`SELECT group_name, stream_name, `+pbOfferSel+`, count() AS conv, `+convTrashSelect(c.postbackCols)+`,
+			`+profitSumsSelect(c.postbackCols)+`, `+convCostSelect(c.postbackCols)+`
 		 FROM postbacks WHERE ts >= ? AND ts < ?
-		 GROUP BY group_name, stream_name`, from, to)
+		 GROUP BY group_name, stream_name, offer`, from, to)
 	if err != nil {
 		return nil, err
 	}
 	defer pbs.Close()
 	for pbs.Next() {
-		var group, stream string
-		var conv uint64
-		var profit float64
-		if err := pbs.Scan(&group, &stream, &conv, &profit); err != nil {
+		var group, stream, offer string
+		var conv, trash uint64
+		var profit, trashProfit, convCost float64
+		if err := pbs.Scan(&group, &stream, &offer, &conv, &trash, &profit, &trashProfit, &convCost); err != nil {
 			return nil, err
 		}
-		i, ok := index[key{group, stream}]
+		i, ok := index[key{group, stream, offer}]
 		if !ok {
 			i = len(out)
-			index[key{group, stream}] = i
-			out = append(out, PerfRow{Group: group, Stream: stream})
+			index[key{group, stream, offer}] = i
+			out = append(out, PerfRow{Group: group, Stream: stream, Offer: offer})
 		}
-		out[i].Conv, out[i].Profit = int64(conv), profit
+		out[i].Conv, out[i].Trash, out[i].TrashProfit = int64(conv), int64(trash), trashProfit
+		out[i].Cost += convCost
+		out[i].Profit = profit - out[i].Cost
 	}
 	return out, pbs.Err()
 }
@@ -306,7 +373,7 @@ func (c *CH) addForwarded(ctx context.Context, from, to time.Time, out *[]PerfRo
 		}
 		i := -1
 		for k := range *out {
-			if (*out)[k].GroupID == gid && (*out)[k].Stream == stream {
+			if (*out)[k].GroupID == gid && (*out)[k].Stream == stream && (*out)[k].Offer == "" {
 				i = k
 				break
 			}
@@ -374,6 +441,7 @@ type LogRow struct {
 	IP      string    `json:"ip"`
 	Keyword string    `json:"keyword"`
 	Out     string    `json:"out"`
+	Offer   string    `json:"offer"`
 
 	// The rest is for the row's detail view, not the table.
 	Region    string `json:"region"`
@@ -436,8 +504,12 @@ func (c *CH) Logs(ctx context.Context, f LogFilter) ([]LogRow, int64, error) {
 	if c.netCols {
 		net = ", asn, org, timezone"
 	}
+	offer := ", '' AS offer"
+	if c.eventOfferCols {
+		offer = ", offer"
+	}
 	q := "SELECT ts, group_name, stream_name, country, city, device, os, browser, brand, bot, uniq, ip, keyword, out," +
-		" region, lang, operator, redirect, referer, useragent, domain, cid" + net +
+		" region, lang, operator, redirect, referer, useragent, domain, cid" + offer + net +
 		" FROM events WHERE " + where + " ORDER BY ts DESC LIMIT ? OFFSET ?"
 	rows, err := c.conn.Query(ctx, q, append(args, limit, f.Offset)...)
 	if err != nil {
@@ -450,7 +522,7 @@ func (c *CH) Logs(ctx context.Context, f LogFilter) ([]LogRow, int64, error) {
 		if err := rows.Scan(&r.TS, &r.Group, &r.Stream, &r.Country, &r.City, &r.Device,
 			&r.OS, &r.Browser, &r.Brand, &r.Bot, &r.Uniq, &r.IP, &r.Keyword, &r.Out,
 			&r.Region, &r.Lang, &r.Operator, &r.Redirect, &r.Referer, &r.UserAgent, &r.Domain, &r.CID,
-			&r.ASN, &r.Org, &r.Timezone); err != nil {
+			&r.Offer, &r.ASN, &r.Org, &r.Timezone); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)
@@ -458,9 +530,94 @@ func (c *CH) Logs(ctx context.Context, f LogFilter) ([]LogRow, int64, error) {
 	return out, int64(total), rows.Err()
 }
 
+// profitSums returns the (revenue, trash) sum expressions for postbacks
+// aggregates. Revenue excludes status=trash; rows predating migration 004
+// carry status=” and count as revenue. Without the columns it degrades to
+// the legacy totals.
+func profitSums(hasCols bool) (rev, trash string) {
+	if !hasCols {
+		return "sum(profit)", "0"
+	}
+	return "sumIf(profit, status != 'trash')", "sumIf(profit, status = 'trash')"
+}
+
+// profitSumsSelect renders both sums as one SELECT fragment.
+func profitSumsSelect(hasCols bool) string {
+	rev, trash := profitSums(hasCols)
+	return rev + ` AS profit, ` + trash + ` AS trash_profit`
+}
+
+// convCounts returns the (all, trash) conversion count expressions.
+func convCounts(hasCols bool) (all, trash string) {
+	if !hasCols {
+		return "count()", "0"
+	}
+	return "count()", "countIf(status = 'trash')"
+}
+
+// convTrashSelect renders the trash conversion count fragment.
+func convTrashSelect(hasCols bool) string {
+	_, trash := convCounts(hasCols)
+	return trash + ` AS trash`
+}
+
+// convCostSelect renders the conversion-cost sum fragment (CPA/Revshare,
+// trash excluded like revenue). Legacy databases contribute 0.
+func convCostSelect(hasCols bool) string {
+	if !hasCols {
+		return `0 AS conv_cost`
+	}
+	return `sumIf(cost, status != 'trash') AS conv_cost`
+}
+
+// postbackRowCols lists the postbacks columns for row reads.
+func postbackRowCols(hasCols, hasOffer bool) string {
+	cols := "ts, group_name, stream_name, domain, page, device, country, city, profit, cid"
+	if hasCols {
+		cols += ", status, tid, cost"
+	}
+	if hasOffer {
+		cols += ", offer"
+	}
+	return cols
+}
+
+// postbackExtraInsert renders the optional INSERT column suffix.
+func postbackExtraInsert(hasCols, hasOffer bool) string {
+	s := ""
+	if hasCols {
+		s = ", status, tid, cost"
+	}
+	if hasOffer {
+		s += ", offer"
+	}
+	return s
+}
+
+// EventOfferID returns the offer a visit was sent to (G-049), "" when the
+// stream served a plain URL or the column did not exist yet.
+func (c *CH) EventOfferID(ctx context.Context, cid string) (string, error) {
+	if !c.eventOfferCols || cid == "" {
+		return "", nil
+	}
+	var id string
+	err := c.conn.QueryRow(ctx,
+		`SELECT offer FROM events WHERE cid = ? ORDER BY ts DESC LIMIT 1`, cid).Scan(&id)
+	return id, err
+}
+
 // RecordPostback finds an event by cid and writes a conversion to postbacks.
-// Returns an error if the event is not found.
-func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64) error {
+// status — нормализованный conversion.ParseStatus (пустым сюда не приходит:
+// parsePostback в engine отбрасывает постбеки без статуса). tid — номер
+// сделки против дублей (G-304); может быть пустым. convCost — стоимость
+// конверсии в USD по модели кампании (CPA/Revshare, G-120); клик-модели,
+// trash и отсутствие цены дают 0. Ценообразование никогда не блокирует запись:
+// convCost считается вызывающим, сюда приходит готовым числом.
+//
+// Idempotency: ORDER BY (cid), поэтому повтор по тому же cid перезаписывает
+// строку. Полный дедуп по паре (cid,tid) с хранением обоих строк требует
+// пересоздания таблицы — следующий шаг, не эта миграция.
+func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64) error {
 	var gname, sname, country, city, device, operator, domain, page string
 	err := c.conn.QueryRow(ctx,
 		`SELECT group_name, stream_name, country, city, device, operator, domain, page
@@ -470,14 +627,34 @@ func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64) err
 		return err
 	}
 	batch, err := c.conn.PrepareBatch(ctx, `INSERT INTO postbacks
-		(domain, page, device, operator, country, city, profit, group_name, stream_name, cid)`)
+		(domain, page, device, operator, country, city, profit, group_name, stream_name, cid`+postbackExtraInsert(c.postbackCols, c.postbackOfferCols)+`)`)
 	if err != nil {
 		return err
 	}
-	if err := batch.Append(domain, page, device, operator, country, city, profit, gname, sname, cid); err != nil {
+	row := []any{domain, page, device, operator, country, city, profit, gname, sname, cid}
+	if c.postbackCols {
+		row = append(row, status, tid, convCost)
+	}
+	if c.postbackOfferCols {
+		row = append(row, offer)
+	}
+	if err := batch.Append(row...); err != nil {
 		return err
 	}
 	return batch.Send()
+}
+
+// EventGroupID returns the group_id of the event with this cid (for pricing
+// a conversion by its entry campaign's model, G-120). Missing event → error;
+// the caller must still record the conversion with zero cost.
+func (c *CH) EventGroupID(ctx context.Context, cid string) (string, error) {
+	var gid string
+	if err := c.conn.QueryRow(ctx,
+		`SELECT group_id FROM events WHERE cid = ? ORDER BY ts DESC LIMIT 1`, cid).
+		Scan(&gid); err != nil {
+		return "", err
+	}
+	return gid, nil
 }
 
 // PostbackRow — a conversion row.
@@ -485,6 +662,7 @@ type PostbackRow struct {
 	TS      time.Time `json:"ts"`
 	Group   string    `json:"group"`
 	Stream  string    `json:"stream"`
+	Offer   string    `json:"offer"`
 	Domain  string    `json:"domain"`
 	Page    string    `json:"page"`
 	Device  string    `json:"device"`
@@ -492,68 +670,105 @@ type PostbackRow struct {
 	City    string    `json:"city"`
 	Profit  float64   `json:"profit"`
 	CID     string    `json:"cid"`
+	Status  string    `json:"status"`
+	TID     string    `json:"tid"`
+	Cost    float64   `json:"cost"`
 }
 
-// Postbacks returns conversions over a period (optional group filter) and the total profit.
-func (c *CH) Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]PostbackRow, float64, error) {
+// Postbacks returns conversions over a period (optional group filter),
+// the Revenue total (excluding trash) and the Revenue (trash) total.
+func (c *CH) Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]PostbackRow, float64, float64, error) {
 	where := "ts >= ? AND ts < ?"
 	args := []any{from, to}
 	if group != "" {
 		where += " AND group_name = ?"
 		args = append(args, group)
 	}
-	var total float64
-	if err := c.conn.QueryRow(ctx, "SELECT sum(profit) FROM postbacks WHERE "+where, args...).Scan(&total); err != nil {
-		return nil, 0, err
+	rev, trashExpr := profitSums(c.postbackCols)
+	var total, trash float64
+	if err := c.conn.QueryRow(ctx, "SELECT "+rev+", "+trashExpr+" FROM postbacks WHERE "+where, args...).Scan(&total, &trash); err != nil {
+		return nil, 0, 0, err
 	}
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
 	rows, err := c.conn.Query(ctx,
-		"SELECT ts, group_name, stream_name, domain, page, device, country, city, profit, cid FROM postbacks WHERE "+
+		"SELECT "+postbackRowCols(c.postbackCols, c.postbackOfferCols)+" FROM postbacks WHERE "+
 			where+" ORDER BY ts DESC LIMIT ?", append(args, limit)...)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer rows.Close()
 	var out []PostbackRow
 	for rows.Next() {
 		var p PostbackRow
-		if err := rows.Scan(&p.TS, &p.Group, &p.Stream, &p.Domain, &p.Page, &p.Device, &p.Country, &p.City, &p.Profit, &p.CID); err != nil {
-			return nil, 0, err
+		scan := []any{&p.TS, &p.Group, &p.Stream, &p.Domain, &p.Page, &p.Device, &p.Country, &p.City, &p.Profit, &p.CID}
+		if c.postbackCols {
+			scan = append(scan, &p.Status, &p.TID, &p.Cost)
+		}
+		if c.postbackOfferCols {
+			scan = append(scan, &p.Offer)
+		}
+		if err := rows.Scan(scan...); err != nil {
+			return nil, 0, 0, err
 		}
 		out = append(out, p)
 	}
-	return out, total, rows.Err()
+	return out, total, trash, rows.Err()
 }
 
 // InsertEvents inserts a batch of events in a single batch request (lock-free).
-func (c *CH) InsertEvents(ctx context.Context, events []logbuf.Event) error {
-	if len(events) == 0 {
-		return nil
-	}
+// eventInsertCols lists the event columns for the INSERT, including the
+// optional groups the schema may or may not have.
+func eventInsertCols(hasNet, hasCost, hasOffer bool) string {
 	cols := `ts, group_id, group_name, stream_name, out, keyword, redirect, device,
 		 operator, country, city, region, lang, uniq, bot, ip, referer, useragent,
 		 domain, page, se, os, os_version, browser, browser_ver, brand,
 		 counter, cid, postback`
-	if c.netCols {
+	if hasOffer {
+		cols += ", offer"
+	}
+	if hasNet {
 		cols += ", asn, org, timezone, via"
 	}
+	if hasCost {
+		cols += ", cost, cost_cur"
+	}
+	return cols
+}
+
+// eventInsertRow flattens an event in the same order as eventInsertCols.
+func eventInsertRow(e logbuf.Event, hasNet, hasCost, hasOffer bool) []any {
+	row := []any{
+		e.Ts, e.GroupID, e.GroupName, e.Stream, e.Out, e.Keyword, e.Redirect,
+		e.Device, e.Operator, e.Country, e.City, e.Region, e.Lang, e.Uniq,
+		e.Bot, e.IP, e.Referer, e.UserAgent, e.Domain, e.Page, e.SE,
+		e.OS, e.OSVersion, e.Browser, e.BrowserV, e.Brand,
+		e.Counter, e.CID, e.Postback,
+	}
+	if hasOffer {
+		row = append(row, e.Offer)
+	}
+	if hasNet {
+		row = append(row, e.ASN, e.Org, e.Timezone, e.Via)
+	}
+	if hasCost {
+		row = append(row, e.Cost, e.CostCur)
+	}
+	return row
+}
+
+func (c *CH) InsertEvents(ctx context.Context, events []logbuf.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	cols := eventInsertCols(c.netCols, c.eventCostCols, c.eventOfferCols)
 	batch, err := c.conn.PrepareBatch(ctx, "INSERT INTO events ("+cols+")")
 	if err != nil {
 		return fmt.Errorf("clickhouse: prepare batch: %w", err)
 	}
 	for _, e := range events {
-		row := []any{
-			e.Ts, e.GroupID, e.GroupName, e.Stream, e.Out, e.Keyword, e.Redirect,
-			e.Device, e.Operator, e.Country, e.City, e.Region, e.Lang, e.Uniq,
-			e.Bot, e.IP, e.Referer, e.UserAgent, e.Domain, e.Page, e.SE,
-			e.OS, e.OSVersion, e.Browser, e.BrowserV, e.Brand,
-			e.Counter, e.CID, e.Postback,
-		}
-		if c.netCols {
-			row = append(row, e.ASN, e.Org, e.Timezone, e.Via)
-		}
+		row := eventInsertRow(e, c.netCols, c.eventCostCols, c.eventOfferCols)
 		if err := batch.Append(row...); err != nil {
 			return fmt.Errorf("clickhouse: append: %w", err)
 		}

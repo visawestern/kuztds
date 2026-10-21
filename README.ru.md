@@ -616,10 +616,13 @@ UA-блэклист и IP-списки поисковиков. Детект ид
 `[CID]`, и пусть оффер вызовет:
 
 ```
-http://your-host/?pb=YOUR_POSTBACK_KEY&cid=[CID]&profit=1.50
+http://your-host/?pb=YOUR_POSTBACK_KEY&cid=[CID]&profit=1.50&status=sale
 ```
 Движок найдёт исходное событие по `cid` и запишет конверсию (видна в разделе
-**Conversions**).
+**Conversions**). Параметр `status` обязателен (`lead/sale/rejected/registration/
+deposit/trash` или свой `a-z0-9_`); `trash` обнуляет Revenue, но сохраняет сумму
+в отдельной метрике Revenue (trash). Необязательный `tid` — номер сделки против
+дублей постбеков.
 
 **API-режим.** Лендинг может запросить решение у движка, не редиректя посетителя
 сам: отправить `?api=base64(JSON)` (с ключом `KUZTDS_API_KEY`) с данными

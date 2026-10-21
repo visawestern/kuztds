@@ -37,7 +37,7 @@ type StatsProvider interface {
 	Breakdown(ctx context.Context, from, to time.Time, dim string, limit int) ([]store.KV, error)
 	Performance(ctx context.Context, from, to time.Time) ([]store.PerfRow, error)
 	Logs(ctx context.Context, f store.LogFilter) ([]store.LogRow, int64, error)
-	Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]store.PostbackRow, float64, error)
+	Postbacks(ctx context.Context, from, to time.Time, group string, limit int) ([]store.PostbackRow, float64, float64, error)
 	DeleteGroupLogs(ctx context.Context, group string) error
 }
 
@@ -644,11 +644,11 @@ func (s *Server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=logs.csv")
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"ts", "group", "stream", "country", "city", "device", "os", "browser", "brand", "bot", "uniq", "ip", "keyword", "out",
+	_ = cw.Write([]string{"ts", "group", "stream", "country", "city", "device", "os", "browser", "brand", "bot", "uniq", "ip", "keyword", "out", "offer",
 		"region", "lang", "operator", "redirect", "referer", "useragent", "domain", "cid", "asn", "org", "timezone"})
 	for _, x := range rows {
 		rec := []string{x.TS.Format(time.RFC3339), x.Group, x.Stream, x.Country, x.City, x.Device,
-			x.OS, x.Browser, x.Brand, x.Bot, strconv.Itoa(int(x.Uniq)), x.IP, x.Keyword, x.Out,
+			x.OS, x.Browser, x.Brand, x.Bot, strconv.Itoa(int(x.Uniq)), x.IP, x.Keyword, x.Out, x.Offer,
 			x.Region, x.Lang, x.Operator, x.Redirect, x.Referer, x.UserAgent, x.Domain, x.CID,
 			strconv.FormatUint(uint64(x.ASN), 10), x.Org, x.Timezone}
 		for i := range rec {
@@ -697,7 +697,7 @@ func (s *Server) handlePostbacks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	from, to := parseRange(r)
-	rows, total, err := s.cfg.Stats.Postbacks(r.Context(), from, to, r.URL.Query().Get("group"), atoiDef(r.URL.Query().Get("limit"), 200))
+	rows, total, trash, err := s.cfg.Stats.Postbacks(r.Context(), from, to, r.URL.Query().Get("group"), atoiDef(r.URL.Query().Get("limit"), 200))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "postbacks error")
 		return
@@ -705,7 +705,7 @@ func (s *Server) handlePostbacks(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []store.PostbackRow{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"total": total, "trash": trash, "rows": rows})
 }
 
 func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
@@ -758,6 +758,16 @@ func (s *Server) handleGroupsSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[g.ID] = true
+		// G-119: an unknown price model would silently price traffic at 0.
+		if err := g.Cost.Validate(); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// G-048: a broken offer link would silently send every visit to trash.
+		if err := g.ValidateOffers(); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if err := s.cfg.Groups.Save(r.Context(), groups); err != nil {
 		writeErr(w, http.StatusInternalServerError, "save error")

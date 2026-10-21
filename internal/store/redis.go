@@ -175,3 +175,44 @@ func (c *Counters) limitKey(id, stream string, rule config.LimitRule) (string, t
 	day := c.now().UTC().Format("20060102")
 	return "lim:d:" + id + ":" + stream + ":" + day, 48 * time.Hour
 }
+
+// offerKey counts purchases of one offer in one UTC day (G-050). UTC keeps
+// the cap stable no matter where the engine runs; the key expires a day later.
+func (c *Counters) offerKey(groupID, offerID string, now time.Time) string {
+	return "offercap:" + groupID + ":" + offerID + ":" + now.UTC().Format("20060102")
+}
+
+// OfferCapReached reports whether the offer has used up its daily purchases.
+// cap <= 0 means unlimited. An unreadable counter fails open: the visit is
+// served rather than blocked on Redis.
+func (c *Counters) OfferCapReached(ctx context.Context, groupID, offerID string, cap int, now time.Time) (bool, error) {
+	if cap <= 0 || groupID == "" || offerID == "" {
+		return false, nil
+	}
+	n, err := c.rdb.Get(ctx, c.offerKey(groupID, offerID, now)).Int64()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return n >= int64(cap), nil
+}
+
+// CountConversion adds one purchase to the offer's day. Unknown offers and
+// missing Redis counters are not an error: the cap is best effort.
+func (c *Counters) CountConversion(ctx context.Context, groupID, offerID string, now time.Time) error {
+	if groupID == "" || offerID == "" {
+		return nil
+	}
+	key := c.offerKey(groupID, offerID, now)
+	n, err := c.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		end := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+		return c.rdb.ExpireAt(ctx, key, end).Err()
+	}
+	return nil
+}

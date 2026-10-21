@@ -33,13 +33,14 @@ const (
 	JobDisk        = "disk"
 	JobCleanup     = "cleanup"
 	JobConversions = "conversions"
+	JobRates       = "rates"
 	// JobTelegramTest is not scheduled: it exists so the admin panel can ask
 	// for a test message.
 	JobTelegramTest = "telegram_test"
 )
 
 // Jobs lists the scheduled jobs in display order.
-var Jobs = []string{JobIPLists, JobGeoDB, JobVirusTotal, JobDisk, JobCleanup, JobConversions}
+var Jobs = []string{JobIPLists, JobGeoDB, JobVirusTotal, JobDisk, JobCleanup, JobConversions, JobRates}
 
 // Config is the whole cron configuration (one JSON file).
 type Config struct {
@@ -50,6 +51,7 @@ type Config struct {
 	Disk        Disk        `json:"disk"`
 	Cleanup     Cleanup     `json:"cleanup"`
 	Conversions Conversions `json:"conversions"`
+	Rates       Rates       `json:"rates"`
 }
 
 // Telegram — where notifications go.
@@ -134,6 +136,18 @@ type Conversions struct {
 	Template     string `json:"template"` // [PROFIT] [GROUP] [STREAM] [COUNTRY] [CITY] [DEVICE] [DOMAIN] [CID]
 }
 
+// Rates — the ECB reference rates the price model needs (G-121). The feed is
+// quoted against EUR; cron rebases it to USD per unit and writes
+// <DataDir>/rates.json, which the engine picks up on reload.
+type Rates struct {
+	Enabled      bool   `json:"enabled"`
+	EveryMinutes int    `json:"every_minutes"`
+	URL          string `json:"url"`
+}
+
+// DefaultECBURL is the daily reference rates feed.
+const DefaultECBURL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+
 // DefaultConversionTemplate is used when the template is empty.
 const DefaultConversionTemplate = "💰 [PROFIT] — [GROUP] / [STREAM] · [COUNTRY] · [DEVICE]"
 
@@ -154,6 +168,7 @@ func Default() Config {
 		Disk:        Disk{EveryMinutes: 10, MinFreePercent: 10},
 		Cleanup:     Cleanup{EveryMinutes: 24 * 60, KeysDays: 30},
 		Conversions: Conversions{EveryMinutes: 1, Template: DefaultConversionTemplate},
+		Rates:       Rates{EveryMinutes: 24 * 60, URL: DefaultECBURL},
 	}
 }
 
@@ -161,6 +176,7 @@ func Default() Config {
 // someone else's API.
 var minInterval = map[string]int{
 	JobIPLists: 10, JobGeoDB: 60, JobVirusTotal: 30, JobDisk: 1, JobCleanup: 60, JobConversions: 1,
+	JobRates: 60,
 }
 
 // Interval returns the job's period, never below its minimum.
@@ -179,6 +195,8 @@ func (c Config) Interval(job string) time.Duration {
 		m = c.Cleanup.EveryMinutes
 	case JobConversions:
 		m = c.Conversions.EveryMinutes
+	case JobRates:
+		m = c.Rates.EveryMinutes
 	}
 	if lo := minInterval[job]; m < lo {
 		m = lo
@@ -201,6 +219,8 @@ func (c Config) Enabled(job string) bool {
 		return c.Cleanup.Enabled
 	case JobConversions:
 		return c.Conversions.Enabled
+	case JobRates:
+		return c.Rates.Enabled
 	}
 	return false
 }
@@ -240,6 +260,11 @@ func (c Config) Validate() error {
 	}
 	if c.Cleanup.KeysDays < 0 {
 		return errors.New("cleanup: keys days must not be negative")
+	}
+	if c.Rates.URL != "" {
+		if err := httpURL(c.Rates.URL); err != nil {
+			return fmt.Errorf("rates: %w", err)
+		}
 	}
 	return nil
 }
