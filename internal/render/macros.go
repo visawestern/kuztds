@@ -8,30 +8,32 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 // MacroDeps — data for expanding output macros.
 type MacroDeps struct {
-	Key       string   // [KEY] (url-encoded)
-	Path      string   // [PATH]
-	IP        string   // [IP]
-	Country   string   // [COUNTRY], [()COUNTRY()]
-	City      string   // [CITY], [()CITY()]
-	Region    string   // [REGION]
-	ASN       string   // [ASN] — the number, "" when unknown
-	Org       string   // [ORG] (url-encoded: free text from the database)
-	Timezone  string   // [TIMEZONE] — IANA name
-	TZOffset  string   // [UTC] — current offset, "+3"
-	Lang      string   // [LANG]
-	Device    string   // [DEVICE]
-	Operator  string   // [OPERATOR]
-	Domain    string   // [DOMAIN]
-	UserAgent string   // [USERAGENT]
-	CID       string   // [CID]
-	Pars      []string // [PAR-1]..[PAR-5]
-	DataDir   string   // .dat directory for [RANDLINE]/[RANDDFL]
+	Key       string            // [KEY] (url-encoded)
+	Path      string            // [PATH]
+	IP        string            // [IP]
+	Country   string            // [COUNTRY], [()COUNTRY()]
+	City      string            // [CITY], [()CITY()]
+	Region    string            // [REGION]
+	ASN       string            // [ASN] — the number, "" when unknown
+	Org       string            // [ORG] (url-encoded: free text from the database)
+	Timezone  string            // [TIMEZONE] — IANA name
+	TZOffset  string            // [UTC] — current offset, "+3"
+	Lang      string            // [LANG]
+	Device    string            // [DEVICE]
+	Operator  string            // [OPERATOR]
+	Domain    string            // [DOMAIN]
+	UserAgent string            // [USERAGENT]
+	CID       string            // [CID]
+	Pars      []string          // [PAR-1]..[PAR-5]
+	Extra     map[string]string // G-055: traffic source labels, [GCLID] and so on
+	DataDir   string            // .dat directory for [RANDLINE]/[RANDDFL]
 	Rng       *rand.Rand
 }
 
@@ -140,6 +142,16 @@ func (d MacroDeps) scalars() []scalarMacro {
 			v = d.Pars[i]
 		}
 		out = append(out, scalarMacro{"[PAR-" + strconv.Itoa(i+1) + "]", v})
+	}
+	if len(d.Extra) > 0 {
+		names := make([]string, 0, len(d.Extra))
+		for name := range d.Extra {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			out = append(out, scalarMacro{"[" + strings.ToUpper(name) + "]", d.Extra[name]})
+		}
 	}
 	return out
 }

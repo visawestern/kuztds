@@ -305,6 +305,14 @@ serves that offer's URL exactly like an HTTP redirect, with all output macros
 expanded. `name` and `network` are for you and for reports; `id` is what a
 stream points at.
 
+A flow may keep ready-made traffic source templates (Flow settings → Traffic
+source): each maps a query parameter to a short label, so a link can carry
+`[GCLID]` or `[SRC]` instead of counting positional `[PAR-n]`. Only the active
+template is read per visit; a missing parameter expands to an empty string.
+Labels cannot shadow built-in macros such as `[CID]` or `[COUNTRY]`. The
+visitor's values are not rescanned for macros of their own and are inserted
+as-is, like `[PAR-n]`: the link template is responsible for escaping.
+
 A stream output may name several offers separated by `|||`:
 `"redirect": "offer", "out": "o1|||backup"`. The stream's distribution picks
 one per visit — rotator remembers the pick in a cookie, evenly rotates in

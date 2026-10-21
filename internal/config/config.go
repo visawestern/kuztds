@@ -78,8 +78,90 @@ type Group struct {
 
 	Cost   CostModel `json:"cost"`   // G-119…G-123: price model of the campaign
 	Offers []Offer   `json:"offers"` // G-048: offers of the campaign
+	// G-055: ready-made traffic source templates and the active one.
+	Sources []TrafficSource `json:"sources"`
+	Source  string          `json:"source"`
 
 	Streams []Stream `json:"streams"`
+}
+
+// TrafficSource is a template of query parameters to macro labels, so a flow
+// can be pointed at an ad network without counting positional [PAR-n].
+type TrafficSource struct {
+	ID     string        `json:"id"`
+	Name   string        `json:"name"`
+	Labels []SourceLabel `json:"labels"`
+}
+
+// SourceLabel maps one query parameter to one output macro label.
+type SourceLabel struct {
+	Param string `json:"param"`
+	Label string `json:"label"`
+}
+
+var (
+	sourceIDRe  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	sourceLblRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
+	// Labels the renderer already owns; a template must not shadow them.
+	sourceReserved = map[string]bool{
+		"KEY": true, "PATH": true, "IP": true, "COUNTRY": true, "CITY": true,
+		"REGION": true, "ASN": true, "ORG": true, "TIMEZONE": true, "UTC": true,
+		"LANG": true, "DEVICE": true, "OPERATOR": true, "DOMAIN": true,
+		"USERAGENT": true, "CID": true, "REMOTE": true,
+	}
+)
+
+// ValidateSources rejects templates the engine could not expand, and an active
+// id that points nowhere. Templates may be drafts with no labels.
+func (g Group) ValidateSources() error {
+	seen := map[string]bool{}
+	for i, s := range g.Sources {
+		if !sourceIDRe.MatchString(s.ID) {
+			return fmt.Errorf("config: group %s source %d: id %q must be letters, digits, _ or -", g.ID, i+1, s.ID)
+		}
+		if seen[s.ID] {
+			return fmt.Errorf("config: group %s: duplicate source id %q", g.ID, s.ID)
+		}
+		seen[s.ID] = true
+		labels := map[string]bool{}
+		for j, l := range s.Labels {
+			p := strings.TrimSpace(l.Param)
+			if p == "" || len(p) > 64 || strings.ContainsAny(p, "&=#? \t\r\n") {
+				return fmt.Errorf("config: group %s source %q label %d: parameter %q is not a query key", g.ID, s.ID, j+1, l.Param)
+			}
+			name := strings.ToUpper(strings.TrimSpace(l.Label))
+			if !sourceLblRe.MatchString(strings.TrimSpace(l.Label)) {
+				return fmt.Errorf("config: group %s source %q label %d: label %q must be letters, digits or _ and start with a letter", g.ID, s.ID, j+1, l.Label)
+			}
+			if sourceReserved[name] {
+				return fmt.Errorf("config: group %s source %q: label %q is reserved by the engine", g.ID, s.ID, l.Label)
+			}
+			if labels[name] {
+				return fmt.Errorf("config: group %s source %q: label %q is listed twice", g.ID, s.ID, l.Label)
+			}
+			labels[name] = true
+		}
+	}
+	if g.Source != "" {
+		if _, ok := g.SourceTemplate(g.Source); !ok {
+			return fmt.Errorf("config: group %s: source %q does not exist", g.ID, g.Source)
+		}
+	}
+	return nil
+}
+
+// SourceTemplate returns a traffic source template by id.
+func (g Group) SourceTemplate(id string) (TrafficSource, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return TrafficSource{}, false
+	}
+	for _, s := range g.Sources {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return TrafficSource{}, false
 }
 
 // FirewallRule is a request limit from a single IP per window.

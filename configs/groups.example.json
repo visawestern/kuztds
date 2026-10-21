@@ -61,6 +61,17 @@
         "fallback": ""
       }
     ],
+    "sources": [
+      {
+        "id": "google",
+        "name": "Google Ads",
+        "labels": [
+          {"param": "gclid", "label": "gclid"},
+          {"param": "utm_source", "label": "SRC"}
+        ]
+      }
+    ],
+    "source": "google",
     "save_keys": true,
     "save_keys_se": true,
     "streams": [
@@ -164,7 +175,7 @@
         },
         "out": {
           "redirect": "http_redirect",
-          "out": "https://m.example.com/?k=[KEY]\u0026c=[()COUNTRY()]\u0026r=[RANDNUM-1000-9999]",
+          "out": "https://m.example.com/?k=[KEY]\u0026c=[()COUNTRY()]\u0026r=[RANDNUM-1000-9999]\u0026gclid=[GCLID]\u0026src=[SRC]",
           "chance": 100,
           "distribution": ""
         },

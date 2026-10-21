@@ -485,12 +485,23 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 
 	outRaw = pickOut(w, r, d.counters, rctx, grp.ID, streamName, outRaw, dist)
 
+	// G-055: the active traffic source template turns query parameters into
+	// macros. Only the chosen template is read, and only when it has labels.
+	var extra map[string]string
+	if src, ok := grp.SourceTemplate(grp.Source); ok && len(src.Labels) > 0 {
+		q := r.URL.Query()
+		extra = make(map[string]string, len(src.Labels))
+		for _, l := range src.Labels {
+			extra[strings.ToUpper(strings.TrimSpace(l.Label))] = q.Get(strings.TrimSpace(l.Param))
+		}
+	}
+
 	// 5) Render the output: macros, api_mac, CURL fetch, or a normal redirect.
 	cid := newCID()
 	md := render.MacroDeps{
 		Key: v.Key, Path: r.Host, IP: ip.String(), Country: country, City: g.City,
 		Region: g.Region, Lang: v.Lang, Device: device, Operator: operator,
-		Domain: v.Domain, UserAgent: ua, CID: cid, Pars: pars,
+		Domain: v.Domain, UserAgent: ua, CID: cid, Pars: pars, Extra: extra,
 		ASN: asnText(g.ASN), Org: dashEmpty(g.Org), Timezone: g.Timezone, TZOffset: tzOffset,
 		DataDir: d.dataDir}
 	out := render.Expand(outRaw, md)

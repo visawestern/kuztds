@@ -390,3 +390,30 @@ func TestHealthNoAuth(t *testing.T) {
 		t.Errorf("health → 200, got %d", resp.StatusCode)
 	}
 }
+
+// G-055: a broken traffic source template must not reach the engine.
+func TestGroupsSaveRejectsBadSource(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	for _, payload := range []string{
+		`[{"id":"x","source":"nope"}]`,
+		`[{"id":"x","sources":[{"id":"a","labels":[{"param":"cid","label":"CID"}]}]}]`,
+		`[{"id":"x","sources":[{"id":"a","labels":[{"param":"a&b","label":"GCLID"}]}]}]`,
+		`[{"id":"x","sources":[{"id":"a","labels":[{"param":"gclid","label":"G-CLID"}]}]}]`,
+		`[{"id":"x","sources":[{"id":"a"},{"id":"a"}]}]`,
+	} {
+		if code := put(payload); code != http.StatusBadRequest {
+			t.Errorf("bad source %s → 400, got %d", payload, code)
+		}
+	}
+	if code := put(`[{"id":"x","source":"google","sources":[{"id":"google","name":"Google Ads","labels":[{"param":"gclid","label":"gclid"},{"param":"utm_source","label":"SRC"}]}]}]`); code != http.StatusOK {
+		t.Errorf("valid source → 200, got %d", code)
+	}
+}

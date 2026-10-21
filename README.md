@@ -128,7 +128,8 @@ not like a script.**
   and its CSV split a stream by offer, so profit and cost are visible per
   offer; an offer can also be limited to the countries its network buys. A
   stream may rotate several offers (``o1|||backup``) with the same distribution
-  switch.
+  switch; traffic source templates map ad-network parameters (``gclid``) to
+  short macros (``[GCLID]``).
 - Output-variant distribution with `|||`: `random` / `rotator` (cookie) /
   `evenly` (Redis counter).
 - `chance` (show with probability), `separation` (swap output by keyword from a

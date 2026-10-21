@@ -158,6 +158,9 @@ eq(normOffers([{id:'o1',payout:'-2',currency:'',cap_daily:'-1'}]),
 eq(normOffers([{id:'o1',countries:' de, fr  de '}]),
   [{id:'o1',name:'',network:'',url:'',status:false,payout:0,currency:'',cap_daily:0,fallback:'',countries:['DE','FR']}], 'countries are upper-cased, split and de-duplicated');
 eq(normOffers(null), [], 'no offers');
+eq(normSources([{id:' google ',name:' Google Ads ',labels:[{param:' gclid ',label:'gclid'},{param:'',label:''}]}]),
+  [{id:'google',name:'Google Ads',labels:[{param:'gclid',label:'GCLID'}]}], 'source labels are trimmed, upper-cased and empty rows dropped');
+eq(normSources(null), [], 'no sources');
 
 if (failed) { console.log(failed + ' check(s) failed'); process.exit(1); }
 `
