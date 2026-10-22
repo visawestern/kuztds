@@ -226,6 +226,35 @@ func (c *Counters) OfferCapReached(ctx context.Context, groupID, offerID string,
 	return n >= int64(cap), nil
 }
 
+// countConversionOnceScript marks a transaction as seen and increments the
+// offer's day atomically. The set lives 48h, so a retry after midnight is still
+// the same purchase; the day counter itself expires at UTC midnight.
+const countConversionOnceScript = `
+if redis.call('SADD', KEYS[1], ARGV[1]) == 0 then return 0 end
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+local n = redis.call('INCR', KEYS[2])
+if n == 1 then redis.call('EXPIREAT', KEYS[2], ARGV[3]) end
+return n
+`
+
+// CountConversionOnce counts a purchase only once per dedup key. It returns
+// false for a retry or for missing identifiers. Redis errors are reported to
+// the caller, which fails open rather than losing traffic.
+func (c *Counters) CountConversionOnce(ctx context.Context, groupID, offerID, dedup string, now time.Time) (bool, error) {
+	if groupID == "" || offerID == "" || dedup == "" {
+		return false, nil
+	}
+	setKey := "offerconv:" + groupID + ":" + offerID
+	dayKey := c.offerKey(groupID, offerID, now)
+	end := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+	n, err := c.rdb.Eval(ctx, countConversionOnceScript, []string{setKey, dayKey},
+		dedup, int((48 * time.Hour).Seconds()), end.Unix()).Int64()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // CountConversion adds one purchase to the offer's day. Unknown offers and
 // missing Redis counters are not an error: the cap is best effort.
 func (c *Counters) CountConversion(ctx context.Context, groupID, offerID string, now time.Time) error {

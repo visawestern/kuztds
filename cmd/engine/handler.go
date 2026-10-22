@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/egerkuzma/kuztds/internal/config"
+	"github.com/egerkuzma/kuztds/internal/conversion"
 	"github.com/egerkuzma/kuztds/internal/cost"
 	"github.com/egerkuzma/kuztds/internal/detect"
 	"github.com/egerkuzma/kuztds/internal/fetch"
@@ -26,6 +28,14 @@ import (
 	"github.com/egerkuzma/kuztds/internal/store"
 )
 
+// postbackStore is the slice of ClickHouse the postback path needs. Keeping it
+// narrow lets tests simulate an insert failure without a live database.
+type postbackStore interface {
+	EventGroupID(ctx context.Context, cid string) (string, error)
+	EventOfferID(ctx context.Context, cid string) (string, error)
+	RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64) error
+}
+
 // engineDeps — hot-path dependencies assembled in main() and passed to the
 // handler. Extracted from a closure so the pipeline can be exercised through
 // httptest (see handler_test.go).
@@ -38,7 +48,7 @@ type engineDeps struct {
 	counters     *store.Counters
 	groups       *config.Groups
 	logs         *logbuf.Buffer
-	chConn       *store.CH
+	pbStore      postbackStore
 	rates        *ratesStore
 	fetcher      *fetch.Client
 	verifs       *verificationStore
@@ -141,28 +151,22 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		if d.postbackKey != "" && pb == d.postbackKey {
 			q := r.URL.Query()
 			if pbd, ok := parsePostback(q); ok {
-				if d.chConn != nil {
+				if d.pbStore != nil {
 					// Conversion cost by the entry campaign's model (G-120) and the
 					// offer payout when the postback carries no amount (G-049).
 					// Best effort: pricing must never block the conversion itself.
 					profit := pbd.Profit
 					convCost := 0.0
 					offer := ""
-					if gid, gerr := d.chConn.EventGroupID(r.Context(), pbd.CID); gerr == nil && d.groups != nil {
+					gid, gerr := d.pbStore.EventGroupID(r.Context(), pbd.CID)
+					if gerr == nil && d.groups != nil {
 						if grp, found := d.groups.Get(gid); found {
-							if offID, oerr := d.chConn.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
+							if offID, oerr := d.pbStore.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
 								offer = offID
 								if p, priced := effectiveProfit(pbd.Profit, pbd.HasProfit, *grp, offID, d.rates.Rates()); priced {
 									profit = p
 								} else {
 									d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
-								}
-								// G-050: a purchase spends one slot of the offer's day.
-								// trash is a reversal, not a purchase.
-								if pbd.Status != "trash" && d.counters != nil {
-									if cerr := d.counters.CountConversion(r.Context(), gid, offID, time.Now()); cerr != nil {
-										d.log.Debug("engine: offer cap not counted", "offer", offID, "err", cerr)
-									}
 								}
 							}
 							m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
@@ -173,14 +177,23 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 							}
 						}
 					}
-					if err := d.chConn.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost); err != nil {
+					if err := d.pbStore.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost); err != nil {
 						d.log.Warn("postback failed", "cid", pbd.CID, "status", pbd.Status, "err", err)
 						d.journalPostback(r, "not_recorded", err.Error())
+					} else if pbd.Status != "trash" && d.counters != nil && offer != "" {
+						// G-050/G-304: spend a slot only after the conversion is
+						// safely recorded, and only once per (cid, tid).
+						if _, cerr := d.counters.CountConversionOnce(r.Context(), gid, offer,
+							conversion.DedupKey(pbd.CID, pbd.TID), time.Now()); cerr != nil {
+							d.log.Debug("engine: offer cap not counted", "offer", offer, "err", cerr)
+						}
 					}
 				}
 			} else {
-				d.log.Warn("postback ignored", "query", r.URL.RawQuery)
-				d.journalPostback(r, postbackRejectReason(q), "")
+				reason := postbackRejectReason(q)
+				d.log.Warn("postback ignored", "reason", reason,
+					"cid", clip(q.Get("cid"), 256), "status", clip(q.Get("status"), 256))
+				d.journalPostback(r, reason, "")
 			}
 		}
 		w.WriteHeader(http.StatusOK)

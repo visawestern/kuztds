@@ -168,7 +168,7 @@ func main() {
 
 	// ClickHouse logs (phase 4): asynchronous batch writes. Optional.
 	var logs *logbuf.Buffer
-	var chConn *store.CH
+	var pbStore postbackStore
 	var pbErr *pbErrorLog
 	if a := os.Getenv("KUZTDS_CLICKHOUSE_ADDR"); a != "" {
 		ch, err := store.OpenCH(a, getenv("KUZTDS_CLICKHOUSE_DB", "kuztds"),
@@ -176,7 +176,7 @@ func main() {
 		if err != nil {
 			log.Warn("clickhouse not connected", "err", err)
 		} else {
-			chConn = ch
+			pbStore = ch
 			logs = logbuf.New(ch, 10000, 1000, time.Second, log)
 			go logs.Run(ctx)
 			pbErr = newPBErrorLog(ch, log, 50, 2*time.Second)
@@ -194,7 +194,7 @@ func main() {
 
 	d := &engineDeps{
 		log: log, lists: lists, sigs: sigs, seps: seps, geores: geores, counters: counters,
-		groups: groups, logs: logs, chConn: chConn, rates: rates, verifs: verifs, notFound: notFound, pbErrors: pbErr, fetcher: fetcher,
+		groups: groups, logs: logs, pbStore: pbStore, rates: rates, verifs: verifs, notFound: notFound, pbErrors: pbErr, fetcher: fetcher,
 		dataDir: dataDir, keysDir: keysDir, postbackKey: postbackKey, apiKey: apiKey,
 		trashMode: trashMode, trashURL: trashURL, curlCacheMin: curlCacheMin,
 	}

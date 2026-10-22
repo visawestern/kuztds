@@ -121,3 +121,18 @@ func TestHandlerJournalsRejectedPostback(t *testing.T) {
 		t.Fatalf("ip/query = %q / %q", e.IP, e.Query)
 	}
 }
+
+func TestJournalQueryDropsUnknownTokens(t *testing.T) {
+	q, _ := url.ParseQuery("cid=abc&status=sale&tid=9&profit=1&password=hunter2&token=xyz&pb=secret")
+	got := redactedPostbackQuery(q)
+	for _, bad := range []string{"hunter2", "xyz", "secret", "password", "token"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("journal query leaked %q: %q", bad, got)
+		}
+	}
+	for _, good := range []string{"cid=abc", "status=sale", "tid=9", "profit=1"} {
+		if !strings.Contains(got, good) {
+			t.Fatalf("journal query lost %q: %q", good, got)
+		}
+	}
+}

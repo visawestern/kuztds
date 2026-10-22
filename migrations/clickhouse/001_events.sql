@@ -44,6 +44,7 @@ TTL ts + INTERVAL 21 DAY;
 CREATE TABLE IF NOT EXISTS kuztds.postbacks
 (
     ts          DateTime DEFAULT now(),
+    version     DateTime64(3) DEFAULT now64(3),
     domain      String,
     page        String,
     device      LowCardinality(String),
@@ -53,9 +54,13 @@ CREATE TABLE IF NOT EXISTS kuztds.postbacks
     profit      Float64,
     group_name  LowCardinality(String),
     stream_name LowCardinality(String),
-    cid         String
+    cid         String,
+    status      LowCardinality(String),
+    tid         String,
+    cost        Float64,
+    offer       String
 )
-ENGINE = ReplacingMergeTree(ts)   -- idempotent by cid
+ENGINE = ReplacingMergeTree(version) -- idempotent by (cid, tid)
 PARTITION BY toYYYYMM(ts)
-ORDER BY (cid)
+ORDER BY (cid, tid)
 TTL ts + INTERVAL 365 DAY;

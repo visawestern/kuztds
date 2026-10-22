@@ -10,9 +10,10 @@ import (
 // the postback writes it.
 
 func TestOfferCapReached(t *testing.T) {
-	c, _ := newCounters(t)
+	c, mr := newCounters(t)
 	ctx := context.Background()
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	mr.SetTime(now)
 
 	if reached, err := c.OfferCapReached(ctx, "g", "o1", 2, now); reached || err != nil {
 		t.Fatalf("empty day: (%v,%v), want (false,nil)", reached, err)
@@ -52,6 +53,7 @@ func TestOfferClickCapCountsAtomically(t *testing.T) {
 	c, mr := newCounters(t)
 	defer mr.Close()
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	mr.SetTime(now)
 	for i := 0; i < 2; i++ {
 		reached, err := c.CountClick(context.Background(), "g", "o1", 2, now)
 		if err != nil || reached {
@@ -76,5 +78,39 @@ func TestOfferClickCapCountsAtomically(t *testing.T) {
 	}
 	if mr.Exists("offerclicks:g:o2:20261021") {
 		t.Fatal("uncapped offer must not create a counter")
+	}
+}
+
+func TestCountConversionOnce(t *testing.T) {
+	c, mr := newCounters(t)
+	defer mr.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	mr.SetTime(now)
+
+	ok, err := c.CountConversionOnce(ctx, "g", "o1", "c1\x00t1", now)
+	if err != nil || !ok {
+		t.Fatalf("first: counted=%v err=%v, want true", ok, err)
+	}
+	ok, err = c.CountConversionOnce(ctx, "g", "o1", "c1\x00t1", now)
+	if err != nil || ok {
+		t.Fatalf("duplicate: counted=%v err=%v, want false", ok, err)
+	}
+	if n, err := mr.Get("offercap:g:o1:20261021"); err != nil || n != "1" {
+		t.Fatalf("counter = %q err=%v, want 1", n, err)
+	}
+	ok, err = c.CountConversionOnce(ctx, "g", "o1", "c1\x00t2", now)
+	if err != nil || !ok {
+		t.Fatalf("second tid: counted=%v err=%v, want true", ok, err)
+	}
+	// A retry after midnight is still a duplicate of the same transaction.
+	ok, err = c.CountConversionOnce(ctx, "g", "o1", "c1\x00t1", now.Add(24*time.Hour))
+	if err != nil || ok {
+		t.Fatalf("next-day retry: counted=%v err=%v, want false", ok, err)
+	}
+	// Missing identifiers are not an error and never count.
+	ok, err = c.CountConversionOnce(ctx, "", "", "x", now)
+	if err != nil || ok {
+		t.Fatalf("empty ids: counted=%v err=%v", ok, err)
 	}
 }

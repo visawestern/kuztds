@@ -74,7 +74,8 @@ func (c *CH) ensureSchema(ctx context.Context) {
 	_ = c.conn.Exec(ctx, `ALTER TABLE postbacks
 		ADD COLUMN IF NOT EXISTS status LowCardinality(String),
 		ADD COLUMN IF NOT EXISTS tid String,
-		ADD COLUMN IF NOT EXISTS cost Float64`)
+		ADD COLUMN IF NOT EXISTS cost Float64,
+		ADD COLUMN IF NOT EXISTS version DateTime64(3) DEFAULT now64(3)`)
 	var m uint64
 	merr := c.conn.QueryRow(ctx, `SELECT count() FROM system.columns
 		WHERE database = currentDatabase() AND table = 'postbacks'
@@ -309,7 +310,7 @@ func (c *CH) Performance(ctx context.Context, from, to time.Time) ([]PerfRow, er
 	pbs, err := c.conn.Query(ctx,
 		`SELECT group_name, stream_name, `+pbOfferSel+`, count() AS conv, `+convTrashSelect(c.postbackCols)+`,
 			`+profitSumsSelect(c.postbackCols)+`, `+convCostSelect(c.postbackCols)+`
-		 FROM postbacks WHERE ts >= ? AND ts < ?
+		 FROM postbacks FINAL WHERE ts >= ? AND ts < ?
 		 GROUP BY group_name, stream_name, offer`, from, to)
 	if err != nil {
 		return nil, err
@@ -562,7 +563,7 @@ func profitSums(hasCols bool) (rev, trash string) {
 // profitSumsSelect renders both sums as one SELECT fragment.
 func profitSumsSelect(hasCols bool) string {
 	rev, trash := profitSums(hasCols)
-	return rev + ` AS profit, ` + trash + ` AS trash_profit`
+	return rev + ` AS revenue, ` + trash + ` AS trash_profit`
 }
 
 // convCounts returns the (all, trash) conversion count expressions.
@@ -632,9 +633,10 @@ func (c *CH) EventOfferID(ctx context.Context, cid string) (string, error) {
 // trash и отсутствие цены дают 0. Ценообразование никогда не блокирует запись:
 // convCost считается вызывающим, сюда приходит готовым числом.
 //
-// Idempotency: ORDER BY (cid), поэтому повтор по тому же cid перезаписывает
-// строку. Полный дедуп по паре (cid,tid) с хранением обоих строк требует
-// пересоздания таблицы — следующий шаг, не эта миграция.
+// Idempotency: postbacks is ReplacingMergeTree(version) ORDER BY (cid, tid),
+// so a repeated (cid, tid) collapses on FINAL reads while different tids of
+// the same click are kept. A legacy ORDER BY (cid) table needs the explicit
+// MigratePostbacksDedupe rebuild.
 func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64) error {
 	var gname, sname, country, city, device, operator, domain, page string
 	err := c.conn.QueryRow(ctx,
@@ -711,14 +713,14 @@ func (c *CH) Postbacks(ctx context.Context, from, to time.Time, group, status st
 	}
 	rev, trashExpr := profitSums(c.postbackCols)
 	var total, trash float64
-	if err := c.conn.QueryRow(ctx, "SELECT "+rev+", "+trashExpr+" FROM postbacks WHERE "+where, args...).Scan(&total, &trash); err != nil {
+	if err := c.conn.QueryRow(ctx, "SELECT "+rev+", "+trashExpr+" FROM postbacks FINAL WHERE "+where, args...).Scan(&total, &trash); err != nil {
 		return nil, 0, 0, err
 	}
 	if limit <= 0 || limit > 50000 {
 		limit = 200
 	}
 	rows, err := c.conn.Query(ctx,
-		"SELECT "+postbackRowCols(c.postbackCols, c.postbackOfferCols)+" FROM postbacks WHERE "+
+		"SELECT "+postbackRowCols(c.postbackCols, c.postbackOfferCols)+" FROM postbacks FINAL WHERE "+
 			where+" ORDER BY ts DESC LIMIT ?", append(args, limit)...)
 	if err != nil {
 		return nil, 0, 0, err
@@ -754,7 +756,7 @@ func (c *CH) PostbackStatuses(ctx context.Context, from, to time.Time, group str
 		where += " AND group_name = ?"
 		args = append(args, group)
 	}
-	rows, err := c.conn.Query(ctx, "SELECT status, count() FROM postbacks WHERE "+where+" GROUP BY status ORDER BY status", args...)
+	rows, err := c.conn.Query(ctx, "SELECT status, count() FROM postbacks FINAL WHERE "+where+" GROUP BY status ORDER BY status", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -762,9 +764,11 @@ func (c *CH) PostbackStatuses(ctx context.Context, from, to time.Time, group str
 	out := []KV{}
 	for rows.Next() {
 		var k KV
-		if err := rows.Scan(&k.Key, &k.Count); err != nil {
+		var n uint64
+		if err := rows.Scan(&k.Key, &n); err != nil {
 			return nil, err
 		}
+		k.Count = int64(n)
 		out = append(out, k)
 	}
 	return out, rows.Err()

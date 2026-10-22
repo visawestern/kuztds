@@ -172,14 +172,16 @@ func clip(s string, n int) string {
 	return s
 }
 
-// redactedPostbackQuery keeps the diagnostic fields and removes the secret.
+// journalQuery keeps only the fields the postback parser understands. The
+// allowlist is deliberate: an unknown parameter may be a token from a network
+// and must not end up in a diagnostic table.
 func redactedPostbackQuery(q url.Values) string {
-	c := make(url.Values, len(q))
-	for k, v := range q {
-		if k == "pb" {
-			continue
+	allowed := [...]string{"cid", "status", "tid", "profit"}
+	c := make(url.Values, len(allowed))
+	for _, k := range allowed {
+		if v, ok := q[k]; ok {
+			c[k] = v
 		}
-		c[k] = v
 	}
 	s := c.Encode()
 	if len(s) > 2048 {
