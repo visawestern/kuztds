@@ -417,6 +417,27 @@ the trash answer. An empty list means every country.
 (url-encoded, like `[KEY]`), `[TIMEZONE]` the zone name, `[UTC]` the current
 offset (`+3`).
 
+## Upgrading a legacy postbacks table
+
+New installations create `postbacks` with `ORDER BY (cid, tid)` and a
+`ReplacingMergeTree(version)` engine. An older table sorted only by `cid` needs
+an explicit rebuild; `ALTER` cannot change the sorting key:
+
+```bash
+# dry run: prints the current sorting key
+KUZTDS_CLICKHOUSE_PASSWORD=... go run ./cmd/chmigrate
+
+# rebuild (start the engine once first so status/tid/cost/offer/version exist)
+KUZTDS_CLICKHOUSE_PASSWORD=... go run ./cmd/chmigrate -apply
+```
+
+The command copies into a temporary table, verifies the row counts, atomically
+swaps with `EXCHANGE TABLES`, copies the old table once more to catch writes
+made during the migration, and then drops it. It requires an Atomic or
+Replicated database. Duplicate physical rows may remain until ClickHouse
+merges them; reads use `FINAL`, so revenue and counts are already deduplicated.
+Take a backup before a production rebuild.
+
 ## Implementation notes
 
 - A single long-running process; IP lists in memory (`O(log n)` lookup).

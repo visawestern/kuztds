@@ -93,18 +93,18 @@ func TestCHPostbacksMigrateDedupe(t *testing.T) {
 	}
 
 	var oldCount uint64
-	if err := mig.conn.QueryRow(ctx, "SELECT count() FROM postbacks").Scan(&oldCount); err != nil {
+	if err := mig.conn.QueryRow(ctx, "SELECT count() FROM postbacks FINAL").Scan(&oldCount); err != nil {
 		t.Fatalf("count after migration: %v", err)
 	}
 	if oldCount != 1 {
-		t.Fatalf("count after migration = %d, expected 1", oldCount)
+		t.Fatalf("FINAL count after migration = %d, expected 1", oldCount)
 	}
 
 	if err := mig.conn.Exec(ctx, `INSERT INTO postbacks
 		(ts, version, domain, page, device, operator, country, city, profit,
 		 group_name, stream_name, cid, status, tid, cost, offer)
 		VALUES
-		(now(), now64(3), '', '', '', '', '', '', 2.5, 'g', 's', 'c1', 'sale', 't1', 3, ''),
+		(now(), now64(3), '', '', '', '', '', '', 4.0, 'g', 's', 'c1', 'sale', 't1', 3, ''),
 		(now(), now64(3), '', '', '', '', '', '', 5.0, 'g', 's', 'c1', 'sale', 't2', 0, '')`); err != nil {
 		t.Fatalf("insert post-migration rows: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestCHPostbacksMigrateDedupe(t *testing.T) {
 		"SELECT count(), sum(profit) FROM postbacks FINAL").Scan(&distinct, &revenue); err != nil {
 		t.Fatalf("read final: %v", err)
 	}
-	if distinct != 2 || revenue != 7.5 {
-		t.Errorf("FINAL = %d rows / %v revenue, expected 2 / 7.5", distinct, revenue)
+	if distinct != 2 || revenue != 9.0 {
+		t.Errorf("FINAL = %d rows / %v revenue, expected 2 / 9.0 (newest t1 wins)", distinct, revenue)
 	}
 }

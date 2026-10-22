@@ -94,8 +94,20 @@ func (c *CH) MigratePostbacksDedupe(ctx context.Context) (bool, error) {
 	if err := c.conn.Exec(ctx, "EXCHANGE TABLES postbacks AND "+quoted); err != nil {
 		return false, fmt.Errorf("postbacks migration: exchange: %w", err)
 	}
-	// The exchange renamed the old table to temp; remove it only after the new
-	// table is live. A failure here is reported but does not undo the swap.
+	// Writes that landed between the first copy and the swap are still in the
+	// old table (now temp). Copy once more, after the new table is live, so no
+	// conversion recorded during the migration is lost. Duplicates are harmless:
+	// ReplacingMergeTree keeps the row with the higher version, and live writes
+	// now carry a newer version than the ts-derived one copied here.
+	catchUp := "INSERT INTO postbacks (" + columnList + `)
+		SELECT ts, toDateTime64(ts, 3), domain, page, device, operator, country, city, profit,
+		       group_name, stream_name, cid, status, tid, cost, offer
+		FROM ` + quoted
+	if err := c.conn.Exec(ctx, catchUp); err != nil {
+		return true, fmt.Errorf("postbacks migration: catch-up copy from %s failed: %w", temp, err)
+	}
+	// A failure here is reported but does not undo the swap: postbacks is live
+	// on the new key, and temp can be dropped by hand.
 	if err := c.conn.Exec(ctx, "DROP TABLE "+quoted); err != nil {
 		return true, fmt.Errorf("postbacks migration: old table is now %s, drop failed: %w", temp, err)
 	}

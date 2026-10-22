@@ -29,6 +29,9 @@
 - `cmd/chmigrate` performs the explicit legacy rebuild: dry-run by default,
   `-apply` copies with `version=toDateTime64(ts, 3)`, verifies old/copied/FINAL
   counts, swaps with `EXCHANGE TABLES`, and only then drops the old table.
+  After the swap it copies the old table once more, so writes that landed
+  between the first copy and the swap are not lost; duplicate physical rows
+  collapse under `FINAL`, and a newer live write wins by version.
 - Raw postback query is no longer logged; the journal uses an allowlist
   (`cid`, `status`, `tid`, `profit`), so `pb` and unknown network tokens do not
   reach logs or `postback_errors`.
