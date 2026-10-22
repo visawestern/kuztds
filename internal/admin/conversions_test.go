@@ -24,14 +24,22 @@ type fakeRecorder struct {
 	cid, status  string
 	tid, mode    string
 	profit, cost float64
+	at           time.Time
+	ats          []time.Time
+	calls        int
 }
 
 func (f *fakeRecorder) EventGroupID(context.Context, string) (string, error) {
 	return f.group, f.groupErr
 }
 func (f *fakeRecorder) EventOfferID(context.Context, string) (string, error) { return f.offer, nil }
-func (f *fakeRecorder) RecordPostback(_ context.Context, cid string, profit float64, status, tid, _ string, convCost float64, mode string) (bool, error) {
-	f.cid, f.profit, f.status, f.tid, f.cost, f.mode = cid, profit, status, tid, convCost, mode
+func (f *fakeRecorder) RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string) (bool, error) {
+	return f.RecordPostbackAt(ctx, cid, profit, status, tid, offer, convCost, mode, time.Now())
+}
+func (f *fakeRecorder) RecordPostbackAt(_ context.Context, cid string, profit float64, status, tid, _ string, convCost float64, mode string, at time.Time) (bool, error) {
+	f.cid, f.profit, f.status, f.tid, f.cost, f.mode, f.at = cid, profit, status, tid, convCost, mode, at
+	f.ats = append(f.ats, at)
+	f.calls++
 	return f.recorded, f.recordErr
 }
 
@@ -156,6 +164,105 @@ func TestManualConversionNewModeSpendsEverySlot(t *testing.T) {
 	}
 	if caps.inc != 2 || len(caps.once) != 0 {
 		t.Fatalf("new mode caps = inc %d, once %v; want 2 and none", caps.inc, caps.once)
+	}
+}
+
+func postImport(t *testing.T, c *http.Client, base, csrf, body string) (*http.Response, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/conversions/import", strings.NewReader(body))
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.Header.Set("Content-Type", "text/csv")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp, out
+}
+
+func TestConversionImportCSVHistoricalAndNoCap(t *testing.T) {
+	dir := t.TempDir()
+	if err := cost.SaveRates(filepath.Join(dir, "rates.json"), map[string]float64{"USD": 1, "EUR": 1.1}, "2026-10-22"); err != nil {
+		t.Fatal(err)
+	}
+	rec := &fakeRecorder{group: "g1", offer: "main", recorded: true}
+	caps := &fakeCaps{}
+	srv := conversionServer(t, rec, caps, config.Group{ID: "g1", PostbackDedupe: config.PostbackDedupeNew}, dir)
+	c, csrf := authedClient(t, srv.URL)
+	body := "ts,click_id,status,transaction_id,payout,currency\n" +
+		"2026-10-01 12:00:00,c1,sale,t1,10,EUR\n" +
+		"2026-10-02,c2,lead,t2,5,\n"
+	resp, out := postImport(t, c, srv.URL, csrf, body)
+	if resp.StatusCode != http.StatusOK || out["imported"] != float64(2) {
+		t.Fatalf("import → 200 / 2, got %d (%v)", resp.StatusCode, out)
+	}
+	if rec.calls != 2 || rec.mode != config.PostbackDedupeUpdate || rec.profit != 5 {
+		t.Fatalf("recorder = calls %d mode %q last profit %v", rec.calls, rec.mode, rec.profit)
+	}
+	wantFirst := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	if len(rec.ats) != 2 || !rec.ats[0].Equal(wantFirst) || !rec.ats[1].Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("timestamps = %v", rec.ats)
+	}
+	if caps.inc != 0 || len(caps.once) != 0 {
+		t.Fatalf("historical import spent cap: %+v", caps)
+	}
+}
+
+func TestConversionImportHeaderlessUsesColumnOrder(t *testing.T) {
+	dir := t.TempDir()
+	if err := cost.SaveRates(filepath.Join(dir, "rates.json"), map[string]float64{"USD": 1, "EUR": 1.1}, "2026-10-22"); err != nil {
+		t.Fatal(err)
+	}
+	rec := &fakeRecorder{group: "g1", recorded: true}
+	srv := conversionServer(t, rec, &fakeCaps{}, config.Group{ID: "g1"}, dir)
+	c, csrf := authedClient(t, srv.URL)
+	resp, out := postImport(t, c, srv.URL, csrf, "c1,sale,t1,10,EUR,2026-10-01\n")
+	if resp.StatusCode != http.StatusOK || out["imported"] != float64(1) {
+		t.Fatalf("headerless import = %d (%v)", resp.StatusCode, out)
+	}
+	if rec.cid != "c1" || rec.status != "sale" || rec.tid != "t1" || rec.profit != 11 {
+		t.Fatalf("row = %+v", rec)
+	}
+	if !rec.at.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("ts = %s", rec.at)
+	}
+}
+
+func TestConversionImportReportsBadRows(t *testing.T) {
+	rec := &fakeRecorder{group: "g1", recorded: true}
+	srv := conversionServer(t, rec, &fakeCaps{}, config.Group{ID: "g1"}, t.TempDir())
+	c, csrf := authedClient(t, srv.URL)
+	body := "cid,status,profit\n" +
+		"c1,not/a/status,1\n" +
+		"c2,sale,nope\n" +
+		"c3,sale,10\n"
+	resp, out := postImport(t, c, srv.URL, csrf, body)
+	if resp.StatusCode != http.StatusOK || out["imported"] != float64(1) || out["failed"] != float64(2) {
+		t.Fatalf("partial import = %d (%v)", resp.StatusCode, out)
+	}
+	errs, _ := out["errors"].([]any)
+	if len(errs) != 2 {
+		t.Fatalf("errors = %v", out["errors"])
+	}
+	if first, _ := errs[0].(map[string]any); first["row"] != float64(2) {
+		t.Fatalf("first bad row = %v, want 2", errs[0])
+	}
+	if rec.calls != 1 || rec.cid != "c3" {
+		t.Fatalf("valid row not recorded: calls=%d cid=%q", rec.calls, rec.cid)
+	}
+}
+
+func TestConversionImportRejectsBadFile(t *testing.T) {
+	rec := &fakeRecorder{group: "g1", recorded: true}
+	srv := conversionServer(t, rec, &fakeCaps{}, config.Group{ID: "g1"}, t.TempDir())
+	c, csrf := authedClient(t, srv.URL)
+	for _, body := range []string{"", "cid,foo\nc1,x\n"} {
+		resp, out := postImport(t, c, srv.URL, csrf, body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%q → 400, got %d (%v)", body, resp.StatusCode, out)
+		}
 	}
 }
 

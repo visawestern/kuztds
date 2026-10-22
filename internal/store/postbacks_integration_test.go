@@ -168,3 +168,49 @@ func TestCHPostbackDedupeModes(t *testing.T) {
 		t.Fatalf("after new = %d rows / %v revenue, want 2 / 10.0", len(rows), revenue)
 	}
 }
+
+// TestCHPostbackHistoricalTimestamp covers G-064: an imported purchase keeps
+// its own date in postbacks.ts instead of the import time.
+func TestCHPostbackHistoricalTimestamp(t *testing.T) {
+	ch := chFromEnv(t)
+	defer ch.Close()
+	ctx := context.Background()
+
+	group := fmt.Sprintf("itest_hist_%d", time.Now().UnixNano())
+	cid := group + "_c1"
+	now := time.Now()
+	at := now.Add(-48 * time.Hour).Truncate(time.Second)
+	t.Cleanup(func() {
+		_ = ch.conn.Exec(ctx, "ALTER TABLE events DELETE WHERE group_name = ?", group)
+		_ = ch.conn.Exec(ctx, "ALTER TABLE postbacks DELETE WHERE group_name = ?", group)
+	})
+	if err := ch.InsertEvents(ctx, []logbuf.Event{{
+		Ts: now, GroupID: group, GroupName: group, Stream: "s1", Out: "o1",
+		Device: "phone", Country: "ru", City: "msk", Uniq: 1, IP: "1.1.1.4", CID: cid,
+	}}); err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := ch.RecordPostbackAt(ctx, cid, 12, "sale", "t-old", "", 0, PostbackDedupeUpdate, at); err != nil {
+		t.Fatalf("RecordPostbackAt: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	rows, revenue, _, err := ch.Postbacks(ctx, at.Add(-time.Minute), at.Add(time.Minute), group, "", 10)
+	if err != nil {
+		t.Fatalf("Postbacks: %v", err)
+	}
+	if len(rows) != 1 || revenue != 12 {
+		t.Fatalf("historical window = %d rows / %v revenue, want 1 / 12", len(rows), revenue)
+	}
+	if !rows[0].TS.Equal(at) {
+		t.Errorf("ts = %s, want %s", rows[0].TS, at)
+	}
+	recent, _, _, err := ch.Postbacks(ctx, now.Add(-time.Hour), now.Add(time.Minute), group, "", 10)
+	if err != nil {
+		t.Fatalf("recent Postbacks: %v", err)
+	}
+	if len(recent) != 0 {
+		t.Errorf("historical import leaked into the recent window: %+v", recent)
+	}
+}

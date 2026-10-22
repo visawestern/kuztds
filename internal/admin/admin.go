@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -40,6 +41,7 @@ type PostbackRecorder interface {
 	EventGroupID(ctx context.Context, cid string) (string, error)
 	EventOfferID(ctx context.Context, cid string) (string, error)
 	RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string) (bool, error)
+	RecordPostbackAt(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string, at time.Time) (bool, error)
 }
 
 // ConversionCaps is the offer-cap counter the manual conversion uses. Optional:
@@ -286,6 +288,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/postbacks/statuses", s.auth(http.HandlerFunc(s.handlePostbackStatuses)))
 	mux.Handle("GET /api/postbacks/export", s.auth(http.HandlerFunc(s.handlePostbacksExport)))
 	mux.Handle("POST /api/conversions", s.auth(http.HandlerFunc(s.handleConversionCreate)))
+	mux.Handle("POST /api/conversions/import", s.auth(http.HandlerFunc(s.handleConversionImport)))
 	mux.Handle("GET /api/postback-errors", s.auth(http.HandlerFunc(s.handlePostbackErrors)))
 	mux.Handle("GET /api/postback-errors/export", s.auth(http.HandlerFunc(s.handlePostbackErrorsExport)))
 	mux.Handle("GET /api/keys", s.auth(http.HandlerFunc(s.handleKeys)))
@@ -870,6 +873,245 @@ func (s *Server) handleConversionCreate(w http.ResponseWriter, r *http.Request) 
 		out = "ignored"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": out, "profit": profit, "currency": "USD", "mode": mode})
+}
+
+const maxConversionImportRows = 1000
+
+type importRow struct {
+	Row      int
+	CID      string
+	Status   string
+	TID      string
+	Currency string
+	Amount   float64
+	At       time.Time
+}
+
+type importFailure struct {
+	Row   int    `json:"row"`
+	Error string `json:"error"`
+}
+
+var importColumns = map[string]string{
+	"cid": "cid", "click_id": "cid",
+	"status": "status",
+	"tid":    "tid", "transaction_id": "tid",
+	"profit": "profit", "payout": "profit",
+	"currency": "currency",
+	"ts":       "ts", "date": "ts", "time": "ts",
+}
+
+// handleConversionImport accepts a CSV list of historical purchases (G-064).
+// Rows are applied in order; a bad row is reported and does not abort the
+// batch. Imports always use "update" (re-importing a file is idempotent by
+// cid/tid) and never spend today's offer cap — an old purchase must not
+// consume a cap slot that belongs to live traffic.
+func (s *Server) handleConversionImport(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Recorder == nil {
+		writeErr(w, http.StatusServiceUnavailable, "conversions unavailable")
+		return
+	}
+	rows, failures, err := parseConversionCSV(http.MaxBytesReader(w, r.Body, 5<<20))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(rows) == 0 && len(failures) == 0 {
+		writeErr(w, http.StatusBadRequest, "empty csv")
+		return
+	}
+	rates, err := s.conversionRates()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "rates unavailable")
+		return
+	}
+	groups := map[string]config.Group{}
+	if s.cfg.Groups != nil {
+		if list, gerr := s.cfg.Groups.List(r.Context()); gerr == nil {
+			for _, g := range list {
+				groups[g.ID] = g
+			}
+		}
+	}
+	imported := 0
+	for _, row := range rows {
+		if err := s.recordImported(r.Context(), row, rates, groups); err != nil {
+			failures = append(failures, importFailure{Row: row.Row, Error: err.Error()})
+			continue
+		}
+		imported++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"imported": imported,
+		"failed":   len(failures),
+		"errors":   failures,
+	})
+}
+
+func (s *Server) recordImported(ctx context.Context, row importRow, rates map[string]float64, groups map[string]config.Group) error {
+	profit, priced := cost.NormalizeToUSD(row.Amount, row.Currency, rates)
+	if !priced {
+		return fmt.Errorf("no rate for currency %s", row.Currency)
+	}
+	gid, err := s.cfg.Recorder.EventGroupID(ctx, row.CID)
+	if err != nil {
+		return errors.New("click id not found")
+	}
+	offer, _ := s.cfg.Recorder.EventOfferID(ctx, row.CID)
+	convCost := 0.0
+	if grp, ok := groups[gid]; ok {
+		m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
+		if cc, ok := cost.ForConversionStatusUSD(m, row.Status, profit, rates); ok {
+			convCost = cc
+		}
+	}
+	_, err = s.cfg.Recorder.RecordPostbackAt(ctx, row.CID, profit, row.Status, row.TID, offer, convCost, config.PostbackDedupeUpdate, row.At)
+	return err
+}
+
+func parseConversionCSV(r io.Reader) ([]importRow, []importFailure, error) {
+	cr := csv.NewReader(r)
+	cr.FieldsPerRecord = -1
+	cr.TrimLeadingSpace = true
+	first, err := cr.Read()
+	if err == io.EOF {
+		return nil, nil, errors.New("empty csv")
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("bad csv: %v", err)
+	}
+	if len(first) > 0 {
+		first[0] = strings.TrimPrefix(first[0], "\ufeff")
+	}
+	cols := map[string]int{}
+	isHeader := false
+	for _, h := range first {
+		if importColumns[strings.ToLower(strings.TrimSpace(h))] == "cid" {
+			isHeader = true
+			break
+		}
+	}
+	if isHeader {
+		for i, h := range first {
+			key := importColumns[strings.ToLower(strings.TrimSpace(h))]
+			if key == "" {
+				if strings.TrimSpace(h) == "" {
+					continue
+				}
+				return nil, nil, fmt.Errorf("unknown column %q", strings.TrimSpace(h))
+			}
+			if _, dup := cols[key]; dup {
+				return nil, nil, fmt.Errorf("duplicate column %q", strings.TrimSpace(h))
+			}
+			cols[key] = i
+		}
+		if _, ok := cols["cid"]; !ok {
+			return nil, nil, errors.New("cid column required")
+		}
+	} else {
+		cols = map[string]int{"cid": 0, "status": 1, "tid": 2, "profit": 3, "currency": 4, "ts": 5}
+	}
+	var rows []importRow
+	var failures []importFailure
+	add := func(n int, rec []string) {
+		if len(rec) == 0 {
+			return
+		}
+		allEmpty := true
+		for _, c := range rec {
+			if strings.TrimSpace(c) != "" {
+				allEmpty = false
+				break
+			}
+		}
+		if allEmpty {
+			return
+		}
+		row, ferr := conversionRowFromCSV(n, rec, cols)
+		if ferr != "" {
+			failures = append(failures, importFailure{Row: n, Error: ferr})
+			return
+		}
+		rows = append(rows, row)
+	}
+	line := 2
+	if !isHeader {
+		add(1, first)
+		line = 2
+	}
+	for {
+		rec, rerr := cr.Read()
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return nil, nil, fmt.Errorf("bad csv at row %d: %v", line, rerr)
+		}
+		if len(rows)+len(failures) >= maxConversionImportRows {
+			return nil, nil, fmt.Errorf("too many rows (max %d)", maxConversionImportRows)
+		}
+		add(line, rec)
+		line++
+	}
+	return rows, failures, nil
+}
+
+func conversionRowFromCSV(n int, rec []string, cols map[string]int) (importRow, string) {
+	cell := func(name string) string {
+		i, ok := cols[name]
+		if !ok || i >= len(rec) {
+			return ""
+		}
+		return strings.TrimSpace(rec[i])
+	}
+	row := importRow{Row: n, CID: cell("cid"), Status: cell("status"), TID: cell("tid"), Currency: cell("currency")}
+	if row.CID == "" || len(row.CID) > 256 {
+		return row, "cid required (max 256)"
+	}
+	if row.Status == "" {
+		row.Status = conversion.StatusSale
+	}
+	status, ok := conversion.ParseStatus(row.Status)
+	if !ok {
+		return row, "unknown status"
+	}
+	row.Status = status
+	if len(row.TID) > 256 {
+		return row, "tid too long"
+	}
+	amount := cell("profit")
+	if amount == "" {
+		return row, "profit required"
+	}
+	v, err := strconv.ParseFloat(amount, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return row, "profit must be a number"
+	}
+	row.Amount = v
+	cur, ok := adminCurrency(row.Currency)
+	if !ok {
+		return row, "currency must be a 3-letter code"
+	}
+	row.Currency = cur
+	at := time.Now()
+	if raw := cell("ts"); raw != "" {
+		parsed, terr := parseImportTime(raw)
+		if terr != nil {
+			return row, "bad ts: use RFC3339 or YYYY-MM-DD[ HH:MM[:SS]]"
+		}
+		at = parsed
+	}
+	row.At = at.UTC()
+	return row, ""
+}
+
+func parseImportTime(raw string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04", "2006-01-02"} {
+		if t, err := time.ParseInLocation(layout, raw, time.UTC); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, errors.New("bad time")
 }
 
 func adminCurrency(raw string) (string, bool) {

@@ -415,6 +415,23 @@ alpha-2). A visit from another country goes to the offer's fallback; when the
 fallback does not buy that country either, or there is none, the visit gets
 the trash answer. An empty list means every country.
 
+### Importing purchases
+
+Conversions → **Import purchases** accepts a pasted CSV list or a `.csv` file.
+The header is `ts,cid,status,tid,profit,currency`; aliases `click_id`,
+`transaction_id`, `payout` and `date` are accepted. Only `cid` and `profit` are
+required: an empty status means `sale`, an empty currency means USD, and an
+empty `ts` means now. A headerless list uses the same column order. `ts` accepts
+RFC3339, `YYYY-MM-DD HH:MM[:SS]` or `YYYY-MM-DD` and is treated as UTC. Up to
+1000 rows are imported per request.
+
+Bad rows are reported with their row number and do not abort the rest. Imports
+always use the `update` mode, so re-importing the same file updates a purchase
+by `(cid, tid)` instead of duplicating it, and they never spend today's offer
+cap. The purchase date is written to `postbacks.ts`, so imported history appears
+in the reports for that day, not on the import date.
+
+
 ## Output macros
 
 `[KEY] [PATH] [IP] [COUNTRY] [CITY] [REGION] [ASN] [ORG] [TIMEZONE] [UTC]

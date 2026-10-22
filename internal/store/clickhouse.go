@@ -681,6 +681,16 @@ func (c *CH) EventOfferID(ctx context.Context, cid string) (string, error) {
 // offer slot only once. On a legacy table without dedupe_key the modes
 // degrade to update rather than losing the conversion.
 func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string) (bool, error) {
+	return c.RecordPostbackAt(ctx, cid, profit, status, tid, offer, convCost, mode, time.Now())
+}
+
+// RecordPostbackAt is RecordPostback with an explicit conversion timestamp.
+// Historical imports (G-064) need the purchase date, not the import date;
+// every other caller keeps RecordPostback and therefore "now".
+func (c *CH) RecordPostbackAt(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string, at time.Time) (bool, error) {
+	if at.IsZero() {
+		at = time.Now()
+	}
 	var gname, sname, country, city, device, operator, domain, page string
 	err := c.conn.QueryRow(ctx,
 		`SELECT group_name, stream_name, country, city, device, operator, domain, page
@@ -705,11 +715,11 @@ func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64, sta
 		dedupeKey = newDedupeKey()
 	}
 	batch, err := c.conn.PrepareBatch(ctx, `INSERT INTO postbacks
-		(domain, page, device, operator, country, city, profit, group_name, stream_name, cid`+postbackExtraInsert(c.postbackCols, c.postbackOfferCols, c.postbackDedupeCols)+`)`)
+		(ts, domain, page, device, operator, country, city, profit, group_name, stream_name, cid`+postbackExtraInsert(c.postbackCols, c.postbackOfferCols, c.postbackDedupeCols)+`)`)
 	if err != nil {
 		return false, err
 	}
-	row := []any{domain, page, device, operator, country, city, profit, gname, sname, cid}
+	row := []any{at, domain, page, device, operator, country, city, profit, gname, sname, cid}
 	if c.postbackCols {
 		row = append(row, status, tid, convCost)
 	}
