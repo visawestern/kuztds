@@ -62,6 +62,9 @@ func TestValidateRoutesRejectsReservedPixelPath(t *testing.T) {
 	if err := (Group{ID: "g", Share: &Share{Slug: "_px.js"}}).ValidateRoutes(); err == nil {
 		t.Error("a share slug must not shadow the conversion pixel")
 	}
+	if err := (Group{ID: "_px.gif"}).ValidateRoutes(); err == nil {
+		t.Error("a group id must not shadow the image pixel")
+	}
 	if err := (Group{ID: "g", Aliases: []string{"promo"}}).ValidateRoutes(); err != nil {
 		t.Errorf("a normal route was rejected: %v", err)
 	}

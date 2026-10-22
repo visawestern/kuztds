@@ -124,13 +124,18 @@ func (g Group) ValidatePostbackDedupe() error {
 	}
 }
 
-// ConversionPixelPath is reserved by the engine for the G-309 JS pixel. A
-// group id, alias or share slug with this name would be shadowed by it.
-const ConversionPixelPath = "/_px.js"
+// Conversion pixel paths are reserved by the engine (G-068/G-309): the JS
+// pixel and the 1x1 image pixel. A group id, alias or share slug with one of
+// these names would be shadowed by it.
+const (
+	ConversionPixelPath = "/_px.js"
+	ConversionImagePath = "/_px.gif"
+)
 
 // IsReservedRoute reports whether a first path segment is owned by the engine.
 func IsReservedRoute(name string) bool {
-	return strings.Trim(name, "/") == strings.Trim(ConversionPixelPath, "/")
+	n := strings.Trim(name, "/")
+	return n == strings.Trim(ConversionPixelPath, "/") || n == strings.Trim(ConversionImagePath, "/")
 }
 
 // ValidateRoutes rejects group ids, aliases and share slugs the engine would

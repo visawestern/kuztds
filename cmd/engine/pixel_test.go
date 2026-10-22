@@ -80,6 +80,31 @@ func TestConversionPixelBadStatusDoesNotRecord(t *testing.T) {
 	}
 }
 
+func TestConversionImagePixelRecordsConversion(t *testing.T) {
+	st := &fakePostbackStore{group: "g", offer: "main"}
+	h, c := dedupeEnvMode(t, st, "", 1)
+	rec := do(t, h, "/_px.gif?pb=secret&cid=c1&tid=t1&status=sale&profit=5", "8.8.8.8", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/gif" {
+		t.Fatalf("content-type = %q, want image/gif", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Fatalf("cache-control = %q, want no-store", cc)
+	}
+	if body := rec.Body.Bytes(); len(body) < 6 || string(body[:6]) != "GIF89a" {
+		t.Fatalf("body is not a GIF: %q", body)
+	}
+	if st.records != 1 || st.lastCID != "c1" || st.lastTID != "t1" || st.lastProfit != 5 {
+		t.Fatalf("image pixel payload = %+v", st)
+	}
+	reached, err := c.OfferCapReached(context.Background(), "g", "main", 1, time.Now())
+	if err != nil || !reached {
+		t.Fatalf("recorded image pixel spent no offer slot: reached=%v err=%v", reached, err)
+	}
+}
+
 func TestConversionPixelE2E(t *testing.T) {
 	st := &fakePostbackStore{group: "g1", offer: "main"}
 	h := newEng(t, group(), engHarness{pbStore: st})

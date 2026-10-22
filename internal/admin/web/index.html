@@ -988,6 +988,14 @@ function pixelMemo(base,key,networkID,networks){
   return '<script src="'+u+'&cid='+(n.cid_token||'{subid}')+'&profit='+(n.profit_token||'{payout}')+
     '&status='+(n.status_token||'{status}')+'&tid='+(n.txn_token||'{txn}')+'"><\/script>';
 }
+// G-068: the same conversion as a 1x1 GIF, for pages that cannot run scripts.
+function imagePixelMemo(base,key,networkID,networks){
+  if(!base||!key)return '';
+  const n=(networks||[]).find(x=>x.id===String(networkID||''))||{};
+  const u=base.replace(/\/$/,'')+'/_px.gif?pb='+encodeURIComponent(key);
+  return '<img src="'+u+'&cid='+(n.cid_token||'{subid}')+'&profit='+(n.profit_token||'{payout}')+
+    '&status='+(n.status_token||'{status}')+'&tid='+(n.txn_token||'{txn}')+'" width="1" height="1" alt="">';
+}
 // Root verification files (G-060): trimmed names, bodies kept as typed.
 function normVerifications(list){
   return (list||[]).map(v=>({name:String(v.name||'').trim(),content:String(v.content||'')}))
@@ -1792,7 +1800,7 @@ function collectStream(){
 }
 
 /* ---------- flow settings (drawer) ---------- */
-const offerCard=(o,i,list,networks)=>{const memo=postbackMemo(ENGINE,POSTBACK_KEY,o.network_id,networks),px=pixelMemo(ENGINE,POSTBACK_KEY,o.network_id,networks);return `<div class="card pad" data-off="${i}" style="margin-bottom:8px">
+const offerCard=(o,i,list,networks)=>{const memo=postbackMemo(ENGINE,POSTBACK_KEY,o.network_id,networks),px=pixelMemo(ENGINE,POSTBACK_KEY,o.network_id,networks),img=imagePixelMemo(ENGINE,POSTBACK_KEY,o.network_id,networks);return `<div class="card pad" data-off="${i}" style="margin-bottom:8px">
   <div class="g2">
     <div class="fld"><label>ID — a stream output points at it</label><input class="off-id" value="${esc(o.id||'')}" placeholder="o1" autocomplete="off"></div>
     <div class="fld"><label>Name</label><input class="off-name" value="${esc(o.name||'')}" placeholder="for you, shown in reports" autocomplete="off"></div>
@@ -1821,7 +1829,7 @@ const offerCard=(o,i,list,networks)=>{const memo=postbackMemo(ENGINE,POSTBACK_KE
   <div class="fld"><label>URL — macros like [CID], [PAR-1] work</label><input class="off-url" value="${esc(o.url||'')}" placeholder="https://net.example/?cid=[CID]" autocomplete="off"></div>
   <div class="hint">The postback's <code>profit=</code> wins; without an amount the payout is used, converted to USD with the ECB rates.</div>
   ${memo?`<div class="fld"><label>Paste into the network cabinet</label><div class="row"><code class="mono ell" style="flex:1">${esc(memo)}</code><button type="button" class="sm" data-memo="${esc(memo)}">copy</button></div></div>`:`<div class="hint">Set KUZTDS_POSTBACK_KEY and an engine URL to see the postback link for this network.</div>`}
-  ${px?`<div class="fld"><label>Paste on the thank-you page — JS conversion pixel</label><div class="row"><code class="mono ell" style="flex:1">${esc(px)}</code><button type="button" class="sm" data-memo="${esc(px)}">copy</button></div></div><div class="hint">It records when the page loads and dedupes with the S2S postback by <code>cid</code> + <code>tid</code>.</div>`:''}
+  ${px?`<div class="fld"><label>Thank-you page pixels — JS or image</label><div class="row"><code class="mono ell" style="flex:1">${esc(px)}</code><button type="button" class="sm" data-memo="${esc(px)}">copy</button></div><div class="row" style="margin-top:4px"><code class="mono ell" style="flex:1">${esc(img)}</code><button type="button" class="sm" data-memo="${esc(img)}">copy</button></div></div><div class="hint">Both record when the page loads and dedupe with the S2S postback by <code>cid</code> + <code>tid</code>. The image works where scripts are blocked.</div>`:''}
   <div class="row"><button class="sm ghost" data-offdel="${i}">${icon('trash')}Remove</button></div>
 </div>`};
 const networkCard=(n,i)=>`<div class="card pad" data-net="${i}" style="margin-bottom:8px">
@@ -1944,6 +1952,7 @@ function openFlowSettings(focus){
         <dt>with parameters</dt><dd><code>${esc(base+'/'+g.id+'?p1=a&p2=b')}</code> → [PAR-1] [PAR-2]</dd>
         <dt>postback</dt><dd><code>${esc(base+'/?pb=KEY&cid=[CID]&profit=1.50&status=sale')}</code></dd>
         <dt>conversion pixel</dt><dd><code>${esc(base+'/_px.js?pb=KEY&cid={subid}&profit={payout}&status={status}&tid={txn}')}</code></dd>
+        <dt>image pixel</dt><dd><code>${esc(base+'/_px.gif?pb=KEY&cid={subid}&profit={payout}&status={status}&tid={txn}')}</code></dd>
       </dl>
     </div>
     <div class="sec"><div class="st bad">Danger zone</div>

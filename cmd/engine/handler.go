@@ -212,8 +212,12 @@ func (d *engineDeps) recordConversion(ctx context.Context, pbd postbackData) (bo
 // uniqueness → router → bots → separation/remote/chance → distribution →
 // render → async log → key collection.
 func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == conversionPixelPath {
+	switch r.URL.Path {
+	case conversionPixelPath:
 		d.conversionPixel(w, r)
+		return
+	case conversionImagePath:
+		d.conversionImage(w, r)
 		return
 	}
 	// Postback pixel: ?pb=KEY&cid=<id>&profit=X&status=<status>&tid=<txn>.

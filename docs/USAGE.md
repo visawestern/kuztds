@@ -147,6 +147,10 @@ the uniqueness cookie the client sets, `ztu` by default).
   returns the script but records nothing; `HEAD` requests never record. Send
   the same `cid` + `tid` as the S2S postback so the flow's duplicate mode
   dedupes the pixel and the server message together.
+- Image conversion pixel for a page that cannot run scripts:
+  `<img src="http://host/_px.gif?pb=KEY&cid={subid}&profit={payout}&status=sale&tid={txn}" width="1" height="1" alt="">`.
+  It takes the same parameters, records through the same pipeline and replies
+  with a 1x1 transparent GIF and `no-store`. `/_px.gif` is reserved as well.
 - Any query-string variable can be a stream condition ("URL parameter":
   `utm_source=fb`, or just `sub1` for "present").
 
@@ -412,8 +416,8 @@ empty offer cell, exactly as before.
 An affiliate network template (Flow settings → Affiliate networks) keeps the
 token names its cabinet uses for the click id, profit, status and transaction.
 An offer picks a template, and the offer card then shows the ready postback
-link to paste into that cabinet and the thank-you-page JS pixel built from the
-same tokens:
+link to paste into that cabinet and the thank-you-page JS/image pixels built
+from the same tokens:
 `https://tds.example/?pb=KEY&cid={sub1}&profit={payout}&status={status}&tid={txn}`.
 Empty token fields fall back to `{subid}`, `{payout}`, `{status}`, `{txn}`. The
 link needs `KUZTDS_POSTBACK_KEY` on both the engine and the admin, plus
