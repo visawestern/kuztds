@@ -1158,7 +1158,7 @@ function uniqueName(base,taken){let n=base,i=2;while(taken.includes(n)){n=base+'
 function newFlow(){
   const ids=GROUPS.map(g=>g.id); let n=GROUPS.length+1; while(ids.includes('flow'+n))n++;
   GROUPS.push({id:'flow'+n,name:'',status:true,redirect:'stop',header:'text/html',out:'',geo:'cf',
-    uniq_method:'ip',uniq_seconds:86400,firewall:{enabled:false,queries:100,seconds:60},streams:[]});
+    uniq_method:'ip',uniq_seconds:86400,postback_dedupe:'update',firewall:{enabled:false,queries:100,seconds:60},streams:[]});
   OPEN_SETTINGS=true; markDirty(); go('flows/flow'+n);
 }
 function duplicateFlow(g){
@@ -1885,6 +1885,13 @@ function openFlowSettings(focus){
       <label class="chk"><input type="checkbox" id="g_savekeys" ${g.save_keys?'checked':''}>Collect keywords (?q=)</label>
       <label class="chk"><input type="checkbox" id="g_savekeys_se" ${g.save_keys_se?'checked':''}>Collect keywords from search-engine referers</label>
     </div>
+    <div class="sec"><div class="st">Postbacks</div>
+      <div class="fld"><label>Duplicate transaction id</label>${sel('g_pbdedupe',
+        opt('update','Update the existing conversion',(g.postback_dedupe||'update')==='update')+
+        opt('ignore','Ignore the duplicate',g.postback_dedupe==='ignore')+
+        opt('new','Create a new conversion',g.postback_dedupe==='new'))}</div>
+      <div class="hint">A duplicate is the same cid and tid. <b>Update</b> replaces the amount/status, <b>ignore</b> keeps the first message, <b>new</b> records every message as a separate sale.</div>
+    </div>
     <div class="sec"><div class="st">Antiflood</div>
       <label class="chk"><input type="checkbox" id="fw_en" ${fw.enabled?'checked':''}>Block an IP that sends too many requests</label>
       <div class="g2">
@@ -1988,6 +1995,7 @@ function collectFlow(){
   g.out=g.redirect==='group'?(v('g_group')?val('g_group'):(prev==='group'?g.out:'')):g.redirect==='offer'?(v('g_outv')?readVariants(v('g_outv')):(prev==='offer'?g.out:'')):(v('g_outv')?readVariants(v('g_outv')):(prev==='group'||prev==='offer'?'':g.out||''));
   g.geo=val('g_geo'); g.uniq_method=val('g_uniq');
   g.uniq_seconds=Math.max(0,Math.round((+val('g_uniqh')||0)*3600))||86400;
+  g.postback_dedupe=val('g_pbdedupe')||'update';
   g.save_keys=on('g_savekeys'); g.save_keys_se=on('g_savekeys_se');
   g.firewall={enabled:on('fw_en'),queries:+val('fw_q')||0,seconds:+val('fw_s')||0};
   g.cost={model:val('g_cost_model').trim().toLowerCase(),value:Math.max(0,+val('g_cost_value')||0),

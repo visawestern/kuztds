@@ -58,9 +58,12 @@ CREATE TABLE IF NOT EXISTS kuztds.postbacks
     status      LowCardinality(String),
     tid         String,
     cost        Float64,
-    offer       String
+    offer       String,
+    -- G-299: empty collapses by (cid, tid); a unique value keeps a duplicate
+    -- transaction as a separate conversion ("new" mode).
+    dedupe_key  String
 )
-ENGINE = ReplacingMergeTree(version) -- idempotent by (cid, tid)
+ENGINE = ReplacingMergeTree(version)
 PARTITION BY toYYYYMM(ts)
-ORDER BY (cid, tid)
+ORDER BY (cid, tid, dedupe_key)
 TTL ts + INTERVAL 365 DAY;

@@ -133,6 +133,11 @@ the uniqueness cookie the client sets, `ztu` by default).
   90 days — no click id, no/unknown status, unknown click id, or a storage
   failure — and shown under Conversions → **Rejected postbacks** with a CSV
   export. The journal strips the `pb` key from the stored query.
+  A repeated `(cid, tid)` follows the flow's **Postbacks → duplicate
+  transaction id** mode: `update` replaces the conversion (default), `ignore`
+  keeps the first message, and `new` records every message as a separate sale.
+  An offer cap slot is spent once per `(cid, tid)` for `update`/`ignore`, and
+  once per accepted message for `new`.
 - Any query-string variable can be a stream condition ("URL parameter":
   `utm_source=fb`, or just `sub1` for "present").
 
@@ -419,9 +424,10 @@ offset (`+3`).
 
 ## Upgrading a legacy postbacks table
 
-New installations create `postbacks` with `ORDER BY (cid, tid)` and a
-`ReplacingMergeTree(version)` engine. An older table sorted only by `cid` needs
-an explicit rebuild; `ALTER` cannot change the sorting key:
+New installations create `postbacks` with `ORDER BY (cid, tid, dedupe_key)` and
+a `ReplacingMergeTree(version)` engine. An older table sorted only by `cid` (or
+without `dedupe_key`) needs an explicit rebuild; `ALTER` cannot change the
+sorting key for a legacy `(cid)` table:
 
 ```bash
 # dry run: prints the current sorting key
@@ -436,7 +442,9 @@ swaps with `EXCHANGE TABLES`, copies the old table once more to catch writes
 made during the migration, and then drops it. It requires an Atomic or
 Replicated database. Duplicate physical rows may remain until ClickHouse
 merges them; reads use `FINAL`, so revenue and counts are already deduplicated.
-Take a backup before a production rebuild.
+An existing `(cid, tid)` table is upgraded in place on engine start; the rebuild
+above is for the oldest `ORDER BY (cid)` layout. Take a backup before a
+production rebuild.
 
 ## Implementation notes
 

@@ -134,15 +134,15 @@ func TestCHRoundTrip(t *testing.T) {
 	}
 
 	// Postback for cid_a.
-	if err := ch.RecordPostback(ctx, "cid_a", 2.5, "sale", "", "", 3.0); err != nil {
+	if _, err := ch.RecordPostback(ctx, "cid_a", 2.5, "sale", "", "", 3.0, PostbackDedupeUpdate); err != nil {
 		t.Fatalf("RecordPostback: %v", err)
 	}
 	// Trash postback for cid_b: excluded from Revenue, kept in Revenue (trash).
-	if err := ch.RecordPostback(ctx, "cid_b", 10.0, "trash", "t-9", "", 0); err != nil {
+	if _, err := ch.RecordPostback(ctx, "cid_b", 10.0, "trash", "t-9", "", 0, PostbackDedupeUpdate); err != nil {
 		t.Fatalf("RecordPostback trash: %v", err)
 	}
 	// nonexistent cid → error.
-	if err := ch.RecordPostback(ctx, "nope_cid", 1.0, "sale", "", "", 0); err == nil {
+	if _, err := ch.RecordPostback(ctx, "nope_cid", 1.0, "sale", "", "", 0, PostbackDedupeUpdate); err == nil {
 		t.Error("RecordPostback for an unknown cid must return an error")
 	}
 	time.Sleep(200 * time.Millisecond)

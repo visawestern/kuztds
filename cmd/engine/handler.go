@@ -33,7 +33,7 @@ import (
 type postbackStore interface {
 	EventGroupID(ctx context.Context, cid string) (string, error)
 	EventOfferID(ctx context.Context, cid string) (string, error)
-	RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64) error
+	RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string) (bool, error)
 }
 
 // engineDeps — hot-path dependencies assembled in main() and passed to the
@@ -158,9 +158,11 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 					profit := pbd.Profit
 					convCost := 0.0
 					offer := ""
+					dedupe := config.PostbackDedupeUpdate
 					gid, gerr := d.pbStore.EventGroupID(r.Context(), pbd.CID)
 					if gerr == nil && d.groups != nil {
 						if grp, found := d.groups.Get(gid); found {
+							dedupe = grp.PostbackDedupeMode()
 							if offID, oerr := d.pbStore.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
 								offer = offID
 								if p, priced := effectiveProfit(pbd.Profit, pbd.HasProfit, *grp, offID, d.rates.Rates()); priced {
@@ -177,13 +179,23 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 							}
 						}
 					}
-					if err := d.pbStore.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost); err != nil {
+					recorded, err := d.pbStore.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost, dedupe)
+					if err != nil {
 						d.log.Warn("postback failed", "cid", pbd.CID, "status", pbd.Status, "err", err)
 						d.journalPostback(r, "not_recorded", err.Error())
+					} else if !recorded {
+						// G-299 "ignore": the duplicate is not a new conversion
+						// and must not spend another offer slot.
+						d.log.Debug("postback ignored as duplicate", "cid", pbd.CID, "tid", pbd.TID)
 					} else if pbd.Status != "trash" && d.counters != nil && offer != "" {
 						// G-050/G-304: spend a slot only after the conversion is
-						// safely recorded, and only once per (cid, tid).
-						if _, cerr := d.counters.CountConversionOnce(r.Context(), gid, offer,
+						// safely recorded. "new" treats the same tid as another
+						// sale, so it increments without the dedupe guard.
+						if dedupe == config.PostbackDedupeNew {
+							if cerr := d.counters.CountConversion(r.Context(), gid, offer, time.Now()); cerr != nil {
+								d.log.Debug("engine: offer cap not counted", "offer", offer, "err", cerr)
+							}
+						} else if _, cerr := d.counters.CountConversionOnce(r.Context(), gid, offer,
 							conversion.DedupKey(pbd.CID, pbd.TID), time.Now()); cerr != nil {
 							d.log.Debug("engine: offer cap not counted", "offer", offer, "err", cerr)
 						}

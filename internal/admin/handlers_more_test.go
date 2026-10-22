@@ -746,3 +746,23 @@ func TestPostbackErrorsAPI(t *testing.T) {
 		}
 	}
 }
+
+// G-299: an unknown postback dedupe mode must not be saved — the engine would
+// silently fall back to "update" and overwrite the first conversion.
+func TestGroupsSaveRejectsBadPostbackDedupe(t *testing.T) {
+	srv, _, _ := fullServer(t, nil)
+	c, csrf := authedClient(t, srv.URL)
+	put := func(payload string) int {
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/groups", strings.NewReader(payload))
+		req.Header.Set("X-CSRF-Token", csrf)
+		r, _ := c.Do(req)
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if code := put(`[{"id":"x","postback_dedupe":"upsert"}]`); code != http.StatusBadRequest {
+		t.Errorf("bad dedupe mode → 400, got %d", code)
+	}
+	if code := put(`[{"id":"x","postback_dedupe":"ignore"}]`); code != http.StatusOK {
+		t.Errorf("valid dedupe mode → 200, got %d", code)
+	}
+}

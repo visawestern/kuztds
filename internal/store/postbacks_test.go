@@ -57,13 +57,24 @@ func TestPostbackOfferColumns(t *testing.T) {
 	if cols := postbackRowCols(true, true); !strings.Contains(cols, "offer") {
 		t.Errorf("row cols = %q, missing offer", cols)
 	}
-	if cols := postbackExtraInsert(true, true); !strings.Contains(cols, "offer") {
+	if cols := postbackExtraInsert(true, true, false); !strings.Contains(cols, "offer") {
 		t.Errorf("insert suffix = %q, missing offer", cols)
 	}
-	if cols := postbackExtraInsert(true, false); strings.Contains(cols, "offer") {
+	if cols := postbackExtraInsert(true, false, false); strings.Contains(cols, "offer") {
 		t.Errorf("insert suffix = %q, offer without the column", cols)
 	}
-	if cols := postbackExtraInsert(false, false); cols != "" {
+	if cols := postbackExtraInsert(false, false, false); cols != "" {
 		t.Errorf("legacy insert suffix = %q, want empty", cols)
+	}
+}
+
+// G-299: dedupe_key is appended only when the upgraded table has it, so a
+// legacy INSERT keeps its old column list.
+func TestPostbackDedupeColumn(t *testing.T) {
+	if cols := postbackExtraInsert(true, true, true); !strings.Contains(cols, "dedupe_key") {
+		t.Errorf("insert suffix = %q, missing dedupe_key", cols)
+	}
+	if cols := postbackExtraInsert(true, true, false); strings.Contains(cols, "dedupe_key") {
+		t.Errorf("insert suffix = %q, dedupe_key without the column", cols)
 	}
 }

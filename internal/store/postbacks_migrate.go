@@ -8,7 +8,8 @@ import (
 )
 
 // PostbacksSortingKey returns the ClickHouse sorting key of the postbacks
-// table. Fresh databases have "cid, tid"; an older one has "cid".
+// table. Fresh databases have "cid, tid, dedupe_key"; older ones have
+// "cid, tid" or just "cid".
 func (c *CH) PostbacksSortingKey(ctx context.Context) (string, error) {
 	var key, engine string
 	err := c.conn.QueryRow(ctx,
@@ -20,21 +21,38 @@ func (c *CH) PostbacksSortingKey(ctx context.Context) (string, error) {
 	return key, nil
 }
 
-// MigratePostbacksDedupe rebuilds postbacks with ORDER BY (cid, tid) and a
-// millisecond version column. It is explicit, idempotent and leaves the old
-// table untouched until every row has been copied and counted. The old table
-// was ORDER BY (cid), so different transactions of one click overwrote each
-// other; the new key keeps them.
+// MigratePostbacksDedupe upgrades postbacks to ORDER BY
+// (cid, tid, dedupe_key) and a millisecond version column. It is explicit,
+// idempotent and leaves the old table untouched until every row has been
+// copied and counted. The oldest table was ORDER BY (cid), so different
+// transactions of one click overwrote each other; the second generation kept
+// (cid, tid) but could not implement the "new" duplicate mode.
 func (c *CH) MigratePostbacksDedupe(ctx context.Context) (bool, error) {
 	key, err := c.PostbacksSortingKey(ctx)
 	if err != nil {
 		return false, fmt.Errorf("postbacks migration: %w", err)
 	}
 	norm := strings.ReplaceAll(key, " ", "")
-	if norm == "cid,tid" {
+	if norm == "cid,tid,dedupe_key" {
 		return false, nil
 	}
-	if norm != "cid" {
+	cols, err := c.postbackColumnSet(ctx)
+	if err != nil {
+		return false, err
+	}
+	// The common already-deduplicated table only needs the new key column.
+	// ClickHouse allows this metadata-only ALTER because the column is added
+	// in the same statement; for legacy ORDER BY (cid) it is refused, and the
+	// rebuild below is the only safe route.
+	if norm == "cid,tid" && !cols["dedupe_key"] {
+		if err := c.conn.Exec(ctx, `ALTER TABLE postbacks
+			ADD COLUMN IF NOT EXISTS dedupe_key String,
+			MODIFY ORDER BY (cid, tid, dedupe_key)`); err != nil {
+			return false, fmt.Errorf("postbacks migration: sorting key: %w", err)
+		}
+		return true, nil
+	}
+	if norm != "cid" && norm != "cid,tid" {
 		return false, fmt.Errorf("postbacks migration: unsupported sorting key %q", key)
 	}
 	var dbEngine string
@@ -44,10 +62,6 @@ func (c *CH) MigratePostbacksDedupe(ctx context.Context) (bool, error) {
 	}
 	if !strings.EqualFold(dbEngine, "Atomic") && !strings.EqualFold(dbEngine, "Replicated") {
 		return false, fmt.Errorf("postbacks migration: database engine %q does not support EXCHANGE TABLES", dbEngine)
-	}
-	cols, err := c.postbackColumnSet(ctx)
-	if err != nil {
-		return false, err
 	}
 	for _, name := range []string{"ts", "domain", "page", "device", "operator", "country", "city",
 		"profit", "group_name", "stream_name", "cid", "status", "tid", "cost", "offer", "version"} {
@@ -59,18 +73,24 @@ func (c *CH) MigratePostbacksDedupe(ctx context.Context) (bool, error) {
 	quoted := "`" + temp + "`"
 	defer func() { _ = c.conn.Exec(context.Background(), "DROP TABLE IF EXISTS "+quoted) }()
 
-	columnList := "ts, version, domain, page, device, operator, country, city, profit, group_name, stream_name, cid, status, tid, cost, offer"
+	dedupeSel := "''"
+	if cols["dedupe_key"] {
+		dedupeSel = "dedupe_key"
+	}
+	columnList := "ts, version, domain, page, device, operator, country, city, profit, group_name, stream_name, cid, status, tid, cost, offer, dedupe_key"
 	create := "CREATE TABLE " + quoted + ` ENGINE = ReplacingMergeTree(version)
 		PARTITION BY toYYYYMM(ts)
-		ORDER BY (cid, tid)
+		ORDER BY (cid, tid, dedupe_key)
 		TTL ts + INTERVAL 365 DAY
-		AS SELECT ` + columnList + ` FROM postbacks LIMIT 0`
+		AS SELECT ts, version, domain, page, device, operator, country, city, profit,
+		          group_name, stream_name, cid, status, tid, cost, offer, ` + dedupeSel + ` AS dedupe_key
+		FROM postbacks LIMIT 0`
 	if err := c.conn.Exec(ctx, create); err != nil {
 		return false, fmt.Errorf("postbacks migration: create: %w", err)
 	}
 	insert := "INSERT INTO " + quoted + " (" + columnList + `)
 		SELECT ts, toDateTime64(ts, 3), domain, page, device, operator, country, city, profit,
-		       group_name, stream_name, cid, status, tid, cost, offer
+		       group_name, stream_name, cid, status, tid, cost, offer, ` + dedupeSel + `
 		FROM postbacks`
 	if err := c.conn.Exec(ctx, insert); err != nil {
 		return false, fmt.Errorf("postbacks migration: copy: %w", err)
@@ -101,7 +121,7 @@ func (c *CH) MigratePostbacksDedupe(ctx context.Context) (bool, error) {
 	// now carry a newer version than the ts-derived one copied here.
 	catchUp := "INSERT INTO postbacks (" + columnList + `)
 		SELECT ts, toDateTime64(ts, 3), domain, page, device, operator, country, city, profit,
-		       group_name, stream_name, cid, status, tid, cost, offer
+		       group_name, stream_name, cid, status, tid, cost, offer, ` + dedupeSel + `
 		FROM ` + quoted
 	if err := c.conn.Exec(ctx, catchUp); err != nil {
 		return true, fmt.Errorf("postbacks migration: catch-up copy from %s failed: %w", temp, err)

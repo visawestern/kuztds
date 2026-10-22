@@ -1,5 +1,5 @@
 // Command chmigrate applies explicit ClickHouse migrations that ALTER cannot
-// express, currently the postbacks (cid, tid) rebuild. It is intentionally not
+// express, currently the postbacks (cid, tid, dedupe_key) rebuild. It is intentionally not
 // run by the engine: the operator starts it, reviews the dry-run, then passes
 // -apply.
 package main
@@ -35,7 +35,7 @@ func main() {
 	}
 	fmt.Printf("postbacks sorting key: %s\n", key)
 	if !*apply {
-		fmt.Println("dry run: pass -apply to rebuild with ORDER BY (cid, tid)")
+		fmt.Println("dry run: pass -apply to upgrade to ORDER BY (cid, tid, dedupe_key)")
 		return
 	}
 	applied, err := ch.MigratePostbacksDedupe(ctx)
@@ -46,7 +46,7 @@ func main() {
 		fmt.Println("already migrated")
 		return
 	}
-	fmt.Println("migrated: postbacks now keeps one row per (cid, tid)")
+	fmt.Println("migrated: postbacks now supports update/ignore/new duplicate modes")
 }
 
 func env(k, def string) string {

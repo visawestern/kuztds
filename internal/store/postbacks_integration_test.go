@@ -54,7 +54,7 @@ func TestCHPostbackDedupe(t *testing.T) {
 		{cid1, 5.0, 0, "t-2", "sale"},
 		{cid2, 10.0, 0, "t-3", "trash"},
 	} {
-		if err := ch.RecordPostback(ctx, pb.cid, pb.profit, pb.status, pb.tid, "", pb.cost); err != nil {
+		if _, err := ch.RecordPostback(ctx, pb.cid, pb.profit, pb.status, pb.tid, "", pb.cost, PostbackDedupeUpdate); err != nil {
 			t.Fatalf("RecordPostback(%s,%s): %v", pb.cid, pb.tid, err)
 		}
 	}
@@ -106,5 +106,65 @@ func TestCHPostbackDedupe(t *testing.T) {
 	}
 	if counts["sale"] != 2 || counts["trash"] != 1 {
 		t.Errorf("status counts = %v, expected sale=2 trash=1", counts)
+	}
+}
+
+// TestCHPostbackDedupeModes covers G-299: update replaces, ignore keeps the
+// first message, and new records one row per redelivery.
+func TestCHPostbackDedupeModes(t *testing.T) {
+	ch := chFromEnv(t)
+	defer ch.Close()
+	ctx := context.Background()
+
+	group := fmt.Sprintf("itest_modes_%d", time.Now().UnixNano())
+	cid := group + "_c1"
+	now := time.Now()
+	from := now.Add(-time.Minute)
+	to := now.Add(time.Minute)
+	t.Cleanup(func() {
+		_ = ch.conn.Exec(ctx, "ALTER TABLE events DELETE WHERE group_name = ?", group)
+		_ = ch.conn.Exec(ctx, "ALTER TABLE postbacks DELETE WHERE group_name = ?", group)
+	})
+	if err := ch.InsertEvents(ctx, []logbuf.Event{{
+		Ts: now, GroupID: group, GroupName: group, Stream: "s1", Out: "o1",
+		Device: "phone", Country: "ru", City: "msk", Uniq: 1, IP: "1.1.1.3", CID: cid,
+	}}); err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	record := func(mode string, profit float64) bool {
+		t.Helper()
+		recorded, err := ch.RecordPostback(ctx, cid, profit, "sale", "t-1", "", 0, mode)
+		if err != nil {
+			t.Fatalf("RecordPostback(%s): %v", mode, err)
+		}
+		return recorded
+	}
+	if !record(PostbackDedupeUpdate, 2.5) {
+		t.Fatal("first update was not recorded")
+	}
+	if !record(PostbackDedupeUpdate, 4.0) {
+		t.Fatal("second update was not recorded")
+	}
+	if record(PostbackDedupeIgnore, 9.0) {
+		t.Fatal("ignore recorded a duplicate")
+	}
+	rows, revenue, _, err := ch.Postbacks(ctx, from, to, group, "", 100)
+	if err != nil {
+		t.Fatalf("Postbacks: %v", err)
+	}
+	if len(rows) != 1 || revenue != 4.0 {
+		t.Fatalf("after update+ignore = %d rows / %v revenue, want 1 / 4.0", len(rows), revenue)
+	}
+	if !record(PostbackDedupeNew, 6.0) {
+		t.Fatal("new did not record the second conversion")
+	}
+	rows, revenue, _, err = ch.Postbacks(ctx, from, to, group, "", 100)
+	if err != nil {
+		t.Fatalf("Postbacks: %v", err)
+	}
+	if len(rows) != 2 || revenue != 10.0 {
+		t.Fatalf("after new = %d rows / %v revenue, want 2 / 10.0", len(rows), revenue)
 	}
 }

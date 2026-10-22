@@ -986,6 +986,11 @@ func (s *Server) handleGroupsSave(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// G-299: an unknown duplicate mode would silently behave as update.
+		if err := g.ValidatePostbackDedupe(); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// G-055: a broken source template would leave [LABEL] unexpanded.
 		if err := g.ValidateSources(); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())

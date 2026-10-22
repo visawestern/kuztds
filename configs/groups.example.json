@@ -18,6 +18,7 @@
     "geo": "cf",
     "uniq_method": "ip",
     "uniq_seconds": 86400,
+    "postback_dedupe": "update",
     "firewall": {
       "enabled": false,
       "queries": 100,

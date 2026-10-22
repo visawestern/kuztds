@@ -84,8 +84,8 @@ func TestCHPostbacksMigrateDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sorting key after: %v", err)
 	}
-	if strings.ReplaceAll(after, " ", "") != "cid,tid" {
-		t.Fatalf("sorting key after = %q, expected cid, tid", after)
+	if strings.ReplaceAll(after, " ", "") != "cid,tid,dedupe_key" {
+		t.Fatalf("sorting key after = %q, expected cid, tid, dedupe_key", after)
 	}
 	applied, err = mig.MigratePostbacksDedupe(ctx)
 	if err != nil || applied {
@@ -117,5 +117,66 @@ func TestCHPostbacksMigrateDedupe(t *testing.T) {
 	}
 	if distinct != 2 || revenue != 9.0 {
 		t.Errorf("FINAL = %d rows / %v revenue, expected 2 / 9.0 (newest t1 wins)", distinct, revenue)
+	}
+}
+
+// TestCHPostbacksUpgradeDedupeKey covers the common in-place upgrade: a table
+// already sorted by (cid, tid) gains dedupe_key on engine start, without a
+// rebuild and without losing rows.
+func TestCHPostbacksUpgradeDedupeKey(t *testing.T) {
+	ch := chFromEnv(t)
+	defer ch.Close()
+	ctx := context.Background()
+
+	dbName := fmt.Sprintf("itest_dedupe_key_%d", time.Now().UnixNano())
+	if err := ch.conn.Exec(ctx, "CREATE DATABASE "+dbName+" ENGINE = Atomic"); err != nil {
+		t.Fatalf("create test database: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+dbName) })
+
+	addr := envDef("KUZTDS_CLICKHOUSE_ADDR", "localhost:9000")
+	user := envDef("KUZTDS_CLICKHOUSE_USER", "kuztds")
+	pass := envDef("KUZTDS_CLICKHOUSE_PASSWORD", "devpassword")
+	seed, err := OpenCH(addr, dbName, user, pass)
+	if err != nil {
+		t.Fatalf("OpenCH(seed): %v", err)
+	}
+	defer seed.Close()
+	if err := seed.conn.Exec(ctx, `CREATE TABLE postbacks
+	(
+		ts     DateTime DEFAULT now(),
+		version DateTime64(3) DEFAULT now64(3),
+		cid    String,
+		tid    String,
+		status LowCardinality(String),
+		cost   Float64,
+		offer  String
+	)
+	ENGINE = ReplacingMergeTree(version)
+	ORDER BY (cid, tid)`); err != nil {
+		t.Fatalf("create (cid,tid) postbacks: %v", err)
+	}
+	if err := seed.conn.Exec(ctx, `INSERT INTO postbacks (cid,tid,status) VALUES ('c1','t1','sale')`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	up, err := OpenCH(addr, dbName, user, pass)
+	if err != nil {
+		t.Fatalf("OpenCH(upgrade): %v", err)
+	}
+	defer up.Close()
+	key, err := up.PostbacksSortingKey(ctx)
+	if err != nil {
+		t.Fatalf("sorting key after ensureSchema: %v", err)
+	}
+	if strings.ReplaceAll(key, " ", "") != "cid,tid,dedupe_key" {
+		t.Fatalf("sorting key = %q, expected cid, tid, dedupe_key", key)
+	}
+	var rows uint64
+	if err := up.conn.QueryRow(ctx, "SELECT count() FROM postbacks").Scan(&rows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("rows after in-place upgrade = %d, want 1", rows)
 	}
 }

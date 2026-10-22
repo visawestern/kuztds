@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -30,7 +32,18 @@ type CH struct {
 	eventOfferCols bool
 	// postbackOfferCols: postbacks has offer (migration 008). Same rule.
 	postbackOfferCols bool
+	// postbackDedupeCols: postbacks has dedupe_key in its sorting key (G-299).
+	// Without it "ignore" and "new" degrade to "update": better one conversion
+	// recorded than none. "new" needs the key to keep two rows with one tid.
+	postbackDedupeCols bool
 }
+
+// G-299: incoming postback duplicate modes, mirrored by config.Group.
+const (
+	PostbackDedupeUpdate = "update"
+	PostbackDedupeIgnore = "ignore"
+	PostbackDedupeNew    = "new"
+)
 
 // OpenCH opens a connection to ClickHouse.
 func OpenCH(addr, database, username, password string) (*CH, error) {
@@ -101,6 +114,24 @@ func (c *CH) ensureSchema(ctx context.Context) {
 		if qerr := c.conn.QueryRow(ctx, `SELECT count() FROM system.columns
 			WHERE database = currentDatabase() AND table = 'postbacks' AND name = 'offer'`).Scan(&n); qerr == nil {
 			c.postbackOfferCols = n == 1
+		}
+	}
+	// G-299: dedupe_key turns one sorting key into three behaviours:
+	// "" collapses (update/ignore), a unique value keeps every message (new).
+	// Adding a plain column and changing the key must be one ALTER: ClickHouse
+	// refuses to put an already-existing column into the sorting key.
+	var sortKey string
+	if qerr := c.conn.QueryRow(ctx, `SELECT sorting_key FROM system.tables
+		WHERE database = currentDatabase() AND name = 'postbacks'`).Scan(&sortKey); qerr == nil {
+		norm := strings.ReplaceAll(sortKey, " ", "")
+		if strings.Contains(norm, "dedupe_key") {
+			c.postbackDedupeCols = true
+		} else if norm == "cid,tid" {
+			if aerr := c.conn.Exec(ctx, `ALTER TABLE postbacks
+				ADD COLUMN IF NOT EXISTS dedupe_key String,
+				MODIFY ORDER BY (cid, tid, dedupe_key)`); aerr == nil {
+				c.postbackDedupeCols = true
+			}
 		}
 	}
 	// G-066: rejected postbacks live in their own table. Creating it here as
@@ -602,13 +633,16 @@ func postbackRowCols(hasCols, hasOffer bool) string {
 }
 
 // postbackExtraInsert renders the optional INSERT column suffix.
-func postbackExtraInsert(hasCols, hasOffer bool) string {
+func postbackExtraInsert(hasCols, hasOffer, hasDedupe bool) string {
 	s := ""
 	if hasCols {
 		s = ", status, tid, cost"
 	}
 	if hasOffer {
 		s += ", offer"
+	}
+	if hasDedupe {
+		s += ", dedupe_key"
 	}
 	return s
 }
@@ -633,23 +667,47 @@ func (c *CH) EventOfferID(ctx context.Context, cid string) (string, error) {
 // trash и отсутствие цены дают 0. Ценообразование никогда не блокирует запись:
 // convCost считается вызывающим, сюда приходит готовым числом.
 //
-// Idempotency: postbacks is ReplacingMergeTree(version) ORDER BY (cid, tid),
-// so a repeated (cid, tid) collapses on FINAL reads while different tids of
-// the same click are kept. A legacy ORDER BY (cid) table needs the explicit
-// MigratePostbacksDedupe rebuild.
-func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64) error {
+// Idempotency: postbacks is ReplacingMergeTree(version) ORDER BY
+// (cid, tid, dedupe_key). With an empty dedupe_key a repeated (cid, tid)
+// collapses on FINAL reads while different tids of the same click are kept;
+// a unique dedupe_key (mode "new") deliberately keeps every message.
+//
+// G-299 modes:
+//   - update: insert; the row with the greatest version wins on FINAL.
+//   - ignore: if (cid, tid) exists, return recorded=false and do not insert.
+//   - new: insert with a fresh dedupe_key, so the same tid is a new row.
+//
+// The bool reports whether a row was written; the engine uses it to spend an
+// offer slot only once. On a legacy table without dedupe_key the modes
+// degrade to update rather than losing the conversion.
+func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string) (bool, error) {
 	var gname, sname, country, city, device, operator, domain, page string
 	err := c.conn.QueryRow(ctx,
 		`SELECT group_name, stream_name, country, city, device, operator, domain, page
 		 FROM events WHERE cid = ? ORDER BY ts DESC LIMIT 1`, cid).
 		Scan(&gname, &sname, &country, &city, &device, &operator, &domain, &page)
 	if err != nil {
-		return err
+		return false, err
+	}
+	mode = normalizePostbackDedupe(mode)
+	if mode == PostbackDedupeIgnore && c.postbackCols && c.postbackDedupeCols {
+		var n uint64
+		if err := c.conn.QueryRow(ctx,
+			`SELECT count() FROM postbacks FINAL WHERE cid = ? AND tid = ?`, cid, tid).Scan(&n); err != nil {
+			return false, err
+		}
+		if n > 0 {
+			return false, nil
+		}
+	}
+	dedupeKey := ""
+	if mode == PostbackDedupeNew && c.postbackDedupeCols {
+		dedupeKey = newDedupeKey()
 	}
 	batch, err := c.conn.PrepareBatch(ctx, `INSERT INTO postbacks
-		(domain, page, device, operator, country, city, profit, group_name, stream_name, cid`+postbackExtraInsert(c.postbackCols, c.postbackOfferCols)+`)`)
+		(domain, page, device, operator, country, city, profit, group_name, stream_name, cid`+postbackExtraInsert(c.postbackCols, c.postbackOfferCols, c.postbackDedupeCols)+`)`)
 	if err != nil {
-		return err
+		return false, err
 	}
 	row := []any{domain, page, device, operator, country, city, profit, gname, sname, cid}
 	if c.postbackCols {
@@ -658,10 +716,37 @@ func (c *CH) RecordPostback(ctx context.Context, cid string, profit float64, sta
 	if c.postbackOfferCols {
 		row = append(row, offer)
 	}
-	if err := batch.Append(row...); err != nil {
-		return err
+	if c.postbackDedupeCols {
+		row = append(row, dedupeKey)
 	}
-	return batch.Send()
+	if err := batch.Append(row...); err != nil {
+		return false, err
+	}
+	if err := batch.Send(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func normalizePostbackDedupe(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case PostbackDedupeIgnore:
+		return PostbackDedupeIgnore
+	case PostbackDedupeNew:
+		return PostbackDedupeNew
+	default:
+		return PostbackDedupeUpdate
+	}
+}
+
+// newDedupeKey is deliberately not derived from the tid or the clock: two
+// simultaneous "new" postbacks of one transaction must not collide.
+func newDedupeKey() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // EventGroupID returns the group_id of the event with this cid (for pricing

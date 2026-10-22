@@ -75,6 +75,10 @@ type Group struct {
 	Firewall    FirewallRule `json:"firewall"`     // antiflood
 	SaveKeys    bool         `json:"save_keys"`    // save keywords
 	SaveKeysSE  bool         `json:"save_keys_se"` // save keywords from search engines
+	// G-299: what to do with an incoming postback whose (cid, tid) was
+	// already recorded. "update" (default) replaces the conversion, "ignore"
+	// keeps the first one, "new" records every message as a separate sale.
+	PostbackDedupe string `json:"postback_dedupe,omitempty"`
 
 	Cost   CostModel `json:"cost"`   // G-119…G-123: price model of the campaign
 	Offers []Offer   `json:"offers"` // G-048: offers of the campaign
@@ -87,6 +91,37 @@ type Group struct {
 	Share *Share `json:"share,omitempty"`
 
 	Streams []Stream `json:"streams"`
+}
+
+// G-299: incoming postback duplicate modes.
+const (
+	PostbackDedupeUpdate = "update"
+	PostbackDedupeIgnore = "ignore"
+	PostbackDedupeNew    = "new"
+)
+
+// PostbackDedupeMode returns the normalized mode; an empty value is the
+// historical behaviour (the latest postback replaces the previous one).
+func (g Group) PostbackDedupeMode() string {
+	switch strings.ToLower(strings.TrimSpace(g.PostbackDedupe)) {
+	case PostbackDedupeIgnore:
+		return PostbackDedupeIgnore
+	case PostbackDedupeNew:
+		return PostbackDedupeNew
+	default:
+		return PostbackDedupeUpdate
+	}
+}
+
+// ValidatePostbackDedupe rejects a mode the engine would silently read as
+// "update", which would hide the operator's intent.
+func (g Group) ValidatePostbackDedupe() error {
+	switch strings.ToLower(strings.TrimSpace(g.PostbackDedupe)) {
+	case "", PostbackDedupeUpdate, PostbackDedupeIgnore, PostbackDedupeNew:
+		return nil
+	default:
+		return fmt.Errorf("config: group %s: postback dedupe mode %q must be update, ignore or new", g.ID, g.PostbackDedupe)
+	}
 }
 
 // Share is a clean share link (G-059): /<slug> renders an Open Graph card and
