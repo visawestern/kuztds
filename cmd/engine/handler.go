@@ -139,11 +139,83 @@ func hitPercent(p int) bool {
 	return rand.Intn(100)+1 <= p
 }
 
+// recordConversion applies the shared conversion pipeline used by server
+// postbacks and the thank-you-page pixel: resolve the click's group/offer,
+// price it, dedupe it and spend the offer cap only after a successful insert.
+func (d *engineDeps) recordConversion(ctx context.Context, pbd postbackData) (bool, error) {
+	if d.pbStore == nil {
+		return false, nil
+	}
+	// Conversion cost by the entry campaign's model (G-120) and the offer
+	// payout when the postback carries no amount (G-049). Best effort: pricing
+	// must never block the conversion itself.
+	profit := pbd.Profit
+	convCost := 0.0
+	offer := ""
+	dedupe := config.PostbackDedupeUpdate
+	// G-305: convert an explicit amount before the offer lookup. The click may
+	// have no offer, but the network's currency still has to reach the USD
+	// reports correctly.
+	if pbd.HasProfit {
+		if p, priced := effectiveProfit(pbd, config.Group{}, "", d.rates.Rates()); priced {
+			profit = p
+		} else {
+			profit = 0
+			d.log.Debug("engine: conversion profit skipped (no rates for currency)",
+				"cid", pbd.CID, "currency", pbd.Currency)
+		}
+	}
+	gid, gerr := d.pbStore.EventGroupID(ctx, pbd.CID)
+	if gerr == nil && d.groups != nil {
+		if grp, found := d.groups.Get(gid); found {
+			dedupe = grp.PostbackDedupeMode()
+			if offID, oerr := d.pbStore.EventOfferID(ctx, pbd.CID); oerr == nil && offID != "" {
+				offer = offID
+				if !pbd.HasProfit {
+					if p, priced := effectiveProfit(pbd, *grp, offID, d.rates.Rates()); priced {
+						profit = p
+					} else {
+						d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
+					}
+				}
+			}
+			m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
+			if cc, ok := cost.ForConversionStatusUSD(m, pbd.Status, profit, d.rates.Rates()); ok {
+				convCost = cc
+			} else {
+				d.log.Debug("engine: conversion cost skipped (no rates for currency)", "currency", grp.Cost.Currency)
+			}
+		}
+	}
+	recorded, err := d.pbStore.RecordPostback(ctx, pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost, dedupe)
+	if err != nil {
+		return false, err
+	}
+	if recorded && pbd.Status != conversion.StatusTrash && d.counters != nil && offer != "" {
+		// G-050/G-304: spend a slot only after the conversion is safely
+		// recorded. "new" treats the same tid as another sale, so it
+		// increments without the dedupe guard.
+		if dedupe == config.PostbackDedupeNew {
+			if cerr := d.counters.CountConversion(ctx, gid, offer, time.Now()); cerr != nil {
+				d.log.Debug("engine: offer cap not counted", "offer", offer, "err", cerr)
+			}
+		} else if _, cerr := d.counters.CountConversionOnce(ctx, gid, offer,
+			conversion.DedupKey(pbd.CID, pbd.TID), time.Now()); cerr != nil {
+			d.log.Debug("engine: offer cap not counted", "offer", offer, "err", cerr)
+		}
+	}
+	return recorded, nil
+}
+
 // root — hot-path handler. Full request pipeline:
 // postback → api mode → blacklist → group/trash → antiflood → geo/detect →
 // uniqueness → router → bots → separation/remote/chance → distribution →
 // render → async log → key collection.
 func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == conversionPixelPath {
+		d.conversionPixel(w, r)
+		return
+	}
 	// Postback pixel: ?pb=KEY&cid=<id>&profit=X&status=<status>&tid=<txn>.
 	// Без валидного status= конверсия игнорируется (паритет Keitaro 11),
 	// ответ всё равно 200.
@@ -151,69 +223,14 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 		if d.postbackKey != "" && pb == d.postbackKey {
 			q := r.URL.Query()
 			if pbd, ok := parsePostback(q); ok {
-				if d.pbStore != nil {
-					// Conversion cost by the entry campaign's model (G-120) and the
-					// offer payout when the postback carries no amount (G-049).
-					// Best effort: pricing must never block the conversion itself.
-					profit := pbd.Profit
-					convCost := 0.0
-					offer := ""
-					dedupe := config.PostbackDedupeUpdate
-					// G-305: convert an explicit amount before the offer lookup.
-					// The click may have no offer, but the network's currency still
-					// has to reach the USD reports correctly.
-					if pbd.HasProfit {
-						if p, priced := effectiveProfit(pbd, config.Group{}, "", d.rates.Rates()); priced {
-							profit = p
-						} else {
-							profit = 0
-							d.log.Debug("engine: conversion profit skipped (no rates for currency)",
-								"cid", pbd.CID, "currency", pbd.Currency)
-						}
-					}
-					gid, gerr := d.pbStore.EventGroupID(r.Context(), pbd.CID)
-					if gerr == nil && d.groups != nil {
-						if grp, found := d.groups.Get(gid); found {
-							dedupe = grp.PostbackDedupeMode()
-							if offID, oerr := d.pbStore.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
-								offer = offID
-								if !pbd.HasProfit {
-									if p, priced := effectiveProfit(pbd, *grp, offID, d.rates.Rates()); priced {
-										profit = p
-									} else {
-										d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
-									}
-								}
-							}
-							m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
-							if cc, ok := cost.ForConversionStatusUSD(m, pbd.Status, profit, d.rates.Rates()); ok {
-								convCost = cc
-							} else {
-								d.log.Debug("engine: conversion cost skipped (no rates for currency)", "currency", grp.Cost.Currency)
-							}
-						}
-					}
-					recorded, err := d.pbStore.RecordPostback(r.Context(), pbd.CID, profit, pbd.Status, pbd.TID, offer, convCost, dedupe)
-					if err != nil {
-						d.log.Warn("postback failed", "cid", pbd.CID, "status", pbd.Status, "err", err)
-						d.journalPostback(r, "not_recorded", err.Error())
-					} else if !recorded {
-						// G-299 "ignore": the duplicate is not a new conversion
-						// and must not spend another offer slot.
-						d.log.Debug("postback ignored as duplicate", "cid", pbd.CID, "tid", pbd.TID)
-					} else if pbd.Status != "trash" && d.counters != nil && offer != "" {
-						// G-050/G-304: spend a slot only after the conversion is
-						// safely recorded. "new" treats the same tid as another
-						// sale, so it increments without the dedupe guard.
-						if dedupe == config.PostbackDedupeNew {
-							if cerr := d.counters.CountConversion(r.Context(), gid, offer, time.Now()); cerr != nil {
-								d.log.Debug("engine: offer cap not counted", "offer", offer, "err", cerr)
-							}
-						} else if _, cerr := d.counters.CountConversionOnce(r.Context(), gid, offer,
-							conversion.DedupKey(pbd.CID, pbd.TID), time.Now()); cerr != nil {
-							d.log.Debug("engine: offer cap not counted", "offer", offer, "err", cerr)
-						}
-					}
+				recorded, err := d.recordConversion(r.Context(), pbd)
+				if err != nil {
+					d.log.Warn("postback failed", "cid", pbd.CID, "status", pbd.Status, "err", err)
+					d.journalPostback(r, "not_recorded", err.Error())
+				} else if !recorded {
+					// G-299 "ignore": the duplicate is not a new conversion
+					// and must not spend another offer slot.
+					d.log.Debug("postback ignored as duplicate", "cid", pbd.CID, "tid", pbd.TID)
 				}
 			} else {
 				reason := postbackRejectReason(q)

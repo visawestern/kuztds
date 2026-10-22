@@ -138,6 +138,15 @@ the uniqueness cookie the client sets, `ztu` by default).
   keeps the first message, and `new` records every message as a separate sale.
   An offer cap slot is spent once per `(cid, tid)` for `update`/`ignore`, and
   once per accepted message for `new`.
+- JS conversion pixel for a thank-you page:
+  `<script src="http://host/_px.js?pb=KEY&cid={subid}&profit={payout}&status=sale&tid={txn}"></script>`.
+  It takes the same parameters and statuses as the postback and records the
+  conversion when the browser loads the script; the reply is `no-store` so a
+  reload or a cached script does not hide the request. The `/_px.js` path is
+  reserved by the engine. A missing/wrong key or an invalid status still
+  returns the script but records nothing; `HEAD` requests never record. Send
+  the same `cid` + `tid` as the S2S postback so the flow's duplicate mode
+  dedupes the pixel and the server message together.
 - Any query-string variable can be a stream condition ("URL parameter":
   `utm_source=fb`, or just `sub1` for "present").
 
@@ -403,7 +412,8 @@ empty offer cell, exactly as before.
 An affiliate network template (Flow settings → Affiliate networks) keeps the
 token names its cabinet uses for the click id, profit, status and transaction.
 An offer picks a template, and the offer card then shows the ready postback
-link to paste into that cabinet:
+link to paste into that cabinet and the thank-you-page JS pixel built from the
+same tokens:
 `https://tds.example/?pb=KEY&cid={sub1}&profit={payout}&status={status}&tid={txn}`.
 Empty token fields fall back to `{subid}`, `{payout}`, `{status}`, `{txn}`. The
 link needs `KUZTDS_POSTBACK_KEY` on both the engine and the admin, plus

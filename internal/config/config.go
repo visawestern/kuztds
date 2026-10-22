@@ -124,6 +124,32 @@ func (g Group) ValidatePostbackDedupe() error {
 	}
 }
 
+// ConversionPixelPath is reserved by the engine for the G-309 JS pixel. A
+// group id, alias or share slug with this name would be shadowed by it.
+const ConversionPixelPath = "/_px.js"
+
+// IsReservedRoute reports whether a first path segment is owned by the engine.
+func IsReservedRoute(name string) bool {
+	return strings.Trim(name, "/") == strings.Trim(ConversionPixelPath, "/")
+}
+
+// ValidateRoutes rejects group ids, aliases and share slugs the engine would
+// never reach because a built-in route owns the path.
+func (g Group) ValidateRoutes() error {
+	if IsReservedRoute(g.ID) {
+		return fmt.Errorf("config: group %s: id is reserved by the engine", g.ID)
+	}
+	for _, a := range g.Aliases {
+		if IsReservedRoute(a) {
+			return fmt.Errorf("config: group %s: alias %q is reserved by the engine", g.ID, a)
+		}
+	}
+	if g.Share != nil && IsReservedRoute(g.Share.Slug) {
+		return fmt.Errorf("config: group %s: share slug is reserved by the engine", g.ID)
+	}
+	return nil
+}
+
 // Share is a clean share link (G-059): /<slug> renders an Open Graph card and
 // sends the browser to /<group id>. The card request is not a tracked click, so
 // crawlers building a preview do not pollute the stats.

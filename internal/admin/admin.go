@@ -1377,6 +1377,12 @@ func (s *Server) handleGroupsSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[g.ID] = true
+		// G-309: /_px.js is the conversion pixel, so a group route with that
+		// name would be silently unreachable.
+		if err := g.ValidateRoutes(); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// G-119: an unknown price model would silently price traffic at 0.
 		if err := g.Cost.Validate(); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())

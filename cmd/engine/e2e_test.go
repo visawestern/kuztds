@@ -53,6 +53,7 @@ type engHarness struct {
 	trashMode string
 	trashURL  string
 	notFound  string // 404.html served in trash mode 3
+	pbStore   *fakePostbackStore
 }
 
 func newEng(t *testing.T, groups *config.Groups, h engHarness) http.Handler {
@@ -84,6 +85,9 @@ func newEng(t *testing.T, groups *config.Groups, h engHarness) http.Handler {
 	}
 	if d.trashMode == "" {
 		d.trashMode = "0"
+	}
+	if h.pbStore != nil {
+		d.pbStore = h.pbStore
 	}
 	if h.geoMMDB {
 		if m, err := geo.OpenMMDB("../../internal/geo/testdata/GeoLite2-City-Test.mmdb"); err == nil {

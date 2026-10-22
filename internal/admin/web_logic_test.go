@@ -181,6 +181,10 @@ eq(postbackMemo('https://tds.example/','K','sticky',[{id:'sticky',cid_token:'{su
   'https://tds.example/?pb=K&cid={sub1}&profit={payout}&status={status}&tid={txn}','memo uses the network tokens');
 eq(postbackMemo('','K','',[]), '','memo needs an engine base');
 eq(postbackMemo('https://tds.example/','','',[]), '','memo needs the postback key');
+eq(pixelMemo('https://tds.example/','K','sticky',[{id:'sticky',cid_token:'{sub1}',profit_token:'{payout}',status_token:'{status}',txn_token:'{txn}'}]),
+  '<script src="https://tds.example/_px.js?pb=K&cid={sub1}&profit={payout}&status={status}&tid={txn}"></script>','pixel uses the network tokens');
+eq(pixelMemo('','K','',[]), '','pixel needs an engine base');
+eq(pixelMemo('https://tds.example/','','',[]), '','pixel needs the postback key');
 
 // Clean share links (G-059): trimmed and lower-cased; no slug means no card.
 eq(normShare(' Summer_Preview ',' Picks ','A & B',' https://cdn/p.jpg '),
