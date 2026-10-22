@@ -171,7 +171,10 @@ humans/bots; CSV; a row opens the visit's detail — routing, location, network,
 User-Agent, referer), **Conversions** (filter by flow and status — system
 statuses are labelled, custom ones appear as “Custom · name”; CSV export;
 below the table, **Rejected postbacks** explains why a postback was not
-recorded and exports the same journal as CSV),
+recorded and exports the same journal as CSV; **Add conversion** records a
+purchase the network did not send — the click id must already exist, the
+amount is converted from its currency to USD, and the flow's duplicate mode and
+offer cap are applied exactly as for an incoming postback),
 **Keywords**, **Lists** (`.dat` editor),
 **Tools** (below), **Automation** (below), **Settings**.
 

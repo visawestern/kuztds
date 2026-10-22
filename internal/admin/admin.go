@@ -16,9 +16,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,9 +29,25 @@ import (
 
 	"github.com/egerkuzma/kuztds/internal/config"
 	"github.com/egerkuzma/kuztds/internal/conversion"
+	"github.com/egerkuzma/kuztds/internal/cost"
 	"github.com/egerkuzma/kuztds/internal/security"
 	"github.com/egerkuzma/kuztds/internal/store"
 )
+
+// PostbackRecorder writes a manually added conversion. It is the same narrow
+// slice the engine uses, so the admin server cannot bypass ClickHouse rules.
+type PostbackRecorder interface {
+	EventGroupID(ctx context.Context, cid string) (string, error)
+	EventOfferID(ctx context.Context, cid string) (string, error)
+	RecordPostback(ctx context.Context, cid string, profit float64, status, tid, offer string, convCost float64, mode string) (bool, error)
+}
+
+// ConversionCaps is the offer-cap counter the manual conversion uses. Optional:
+// without Redis the conversion is still recorded, exactly like the engine.
+type ConversionCaps interface {
+	CountConversion(ctx context.Context, groupID, offerID string, now time.Time) error
+	CountConversionOnce(ctx context.Context, groupID, offerID, dedup string, now time.Time) (bool, error)
+}
 
 // StatsProvider — source of statistics (implemented by store.CH).
 type StatsProvider interface {
@@ -90,6 +108,8 @@ type Config struct {
 	PasswordHash string // argon2id
 	Sessions     security.SessionStore
 	Stats        StatsProvider
+	Recorder     PostbackRecorder // G-310: manual conversion
+	Caps         ConversionCaps   // G-310: spend the offer cap after recording
 	Groups       GroupsStore
 	Lists        ListsStore
 	Verify       VerificationsStore // G-060: root files for ad cabinets
@@ -265,6 +285,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/postbacks", s.auth(http.HandlerFunc(s.handlePostbacks)))
 	mux.Handle("GET /api/postbacks/statuses", s.auth(http.HandlerFunc(s.handlePostbackStatuses)))
 	mux.Handle("GET /api/postbacks/export", s.auth(http.HandlerFunc(s.handlePostbacksExport)))
+	mux.Handle("POST /api/conversions", s.auth(http.HandlerFunc(s.handleConversionCreate)))
 	mux.Handle("GET /api/postback-errors", s.auth(http.HandlerFunc(s.handlePostbackErrors)))
 	mux.Handle("GET /api/postback-errors/export", s.auth(http.HandlerFunc(s.handlePostbackErrorsExport)))
 	mux.Handle("GET /api/keys", s.auth(http.HandlerFunc(s.handleKeys)))
@@ -738,6 +759,144 @@ func (s *Server) handlePostbacks(w http.ResponseWriter, r *http.Request) {
 		rows = []store.PostbackRow{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "trash": trash, "rows": rows})
+}
+
+// conversionCreateRequest is the manual conversion form (G-310). profit and
+// payout are pointers because an explicit zero is a valid amount.
+type conversionCreateRequest struct {
+	CID      string   `json:"cid"`
+	Status   string   `json:"status"`
+	TID      string   `json:"tid"`
+	Profit   *float64 `json:"profit"`
+	Payout   *float64 `json:"payout"`
+	Currency string   `json:"currency"`
+}
+
+// handleConversionCreate records a conversion entered by the operator. It is
+// deliberately a separate route from the public postback pixel: admin auth,
+// CSRF and a click id that already exists are required.
+func (s *Server) handleConversionCreate(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Recorder == nil {
+		writeErr(w, http.StatusServiceUnavailable, "conversions unavailable")
+		return
+	}
+	var req conversionCreateRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	cid := strings.TrimSpace(req.CID)
+	if cid == "" || len(cid) > 256 {
+		writeErr(w, http.StatusBadRequest, "cid required")
+		return
+	}
+	status, ok := conversion.ParseStatus(req.Status)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "unknown status")
+		return
+	}
+	amount := req.Profit
+	if amount == nil {
+		amount = req.Payout
+	}
+	if amount == nil || math.IsNaN(*amount) || math.IsInf(*amount, 0) {
+		writeErr(w, http.StatusBadRequest, "profit required")
+		return
+	}
+	currency, ok := adminCurrency(req.Currency)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "currency must be a 3-letter code")
+		return
+	}
+	tid := strings.TrimSpace(req.TID)
+	if len(tid) > 256 {
+		writeErr(w, http.StatusBadRequest, "tid too long")
+		return
+	}
+	rates, err := s.conversionRates()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "rates unavailable")
+		return
+	}
+	profit, priced := cost.NormalizeToUSD(*amount, currency, rates)
+	if !priced {
+		writeErr(w, http.StatusBadRequest, "no rate for currency "+currency)
+		return
+	}
+	gid, err := s.cfg.Recorder.EventGroupID(r.Context(), cid)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "click id not found")
+		return
+	}
+	offer, _ := s.cfg.Recorder.EventOfferID(r.Context(), cid)
+	mode := config.PostbackDedupeUpdate
+	var grp config.Group
+	found := false
+	if s.cfg.Groups != nil {
+		if groups, gerr := s.cfg.Groups.List(r.Context()); gerr == nil {
+			for _, g := range groups {
+				if g.ID == gid {
+					grp, found = g, true
+					mode = g.PostbackDedupeMode()
+					break
+				}
+			}
+		}
+	}
+	convCost := 0.0
+	if found {
+		m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}
+		if cc, priced := cost.ForConversionStatusUSD(m, status, profit, rates); priced {
+			convCost = cc
+		}
+	}
+	recorded, err := s.cfg.Recorder.RecordPostback(r.Context(), cid, profit, status, tid, offer, convCost, mode)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "conversion not recorded")
+		return
+	}
+	// The cap is about purchases, not corrections: "ignore" and "update" keep
+	// one slot per (cid, tid), while "new" spends a slot per message.
+	if recorded && status != conversion.StatusTrash && offer != "" && s.cfg.Caps != nil {
+		now := time.Now()
+		if mode == config.PostbackDedupeNew {
+			_ = s.cfg.Caps.CountConversion(r.Context(), gid, offer, now)
+		} else {
+			_, _ = s.cfg.Caps.CountConversionOnce(r.Context(), gid, offer, conversion.DedupKey(cid, tid), now)
+		}
+	}
+	out := "recorded"
+	if !recorded {
+		out = "ignored"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": out, "profit": profit, "currency": "USD", "mode": mode})
+}
+
+func adminCurrency(raw string) (string, bool) {
+	cur := strings.ToUpper(strings.TrimSpace(raw))
+	if cur == "" {
+		return "", true
+	}
+	if len(cur) != 3 {
+		return "", false
+	}
+	for _, r := range cur {
+		if r < 'A' || r > 'Z' {
+			return "", false
+		}
+	}
+	return cur, true
+}
+
+func (s *Server) conversionRates() (map[string]float64, error) {
+	if s.cfg.DataDir == "" {
+		return nil, nil
+	}
+	rates, _, err := cost.LoadRates(filepath.Join(s.cfg.DataDir, "rates.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return rates, err
 }
 
 func (s *Server) handleVerificationsGet(w http.ResponseWriter, r *http.Request) {

@@ -57,7 +57,9 @@ func main() {
 			log.Warn("redis not connected, using in-memory sessions", "err", err)
 		} else {
 			cfg.Sessions = store.NewRedisSessions(rdb)
-			cfg.Limiter = limiterAdapter{c: store.NewCounters(rdb)}
+			counters := store.NewCounters(rdb)
+			cfg.Limiter = limiterAdapter{c: counters}
+			cfg.Caps = counters
 			log.Info("redis connected", "addr", a)
 		}
 	}
@@ -111,6 +113,7 @@ func main() {
 			log.Warn("clickhouse not connected, stats disabled", "err", err)
 		} else {
 			cfg.Stats = ch
+			cfg.Recorder = ch
 			log.Info("clickhouse connected", "addr", a)
 		}
 	}

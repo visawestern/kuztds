@@ -2134,7 +2134,20 @@ async function conversions(_,live){
   view().innerHTML=`<div class="ph"><h1>Conversions</h1><span class="sub">${periodLabel()}</span><div class="spacer"></div><span id="pb-total" class="muted"></span></div>
     <div class="toolbar"><select id="pb-group"><option value="">All flows</option></select>
       <select id="pb-status"><option value="">All statuses</option></select>
-      <button id="pb-export">Export CSV</button></div><div id="pb-wrap">${stateHTML('Loading…')}</div>
+      <button id="pb-export">Export CSV</button><div class="spacer"></div>
+      <button class="primary" id="pb-add-btn">${icon('plus')}Add conversion</button></div>
+    <div id="pb-add" class="card" hidden>
+      <div class="st">Add conversion manually</div>
+      <div class="g2">
+        <div class="fld"><label>Click ID</label><input id="pba-cid" maxlength="256" placeholder="click id, e.g. 8f3a…"></div>
+        <div class="fld"><label>Status</label><select id="pba-status">${Object.entries(STATUS_LABELS).map(([k,v])=>opt(k,v,k==='sale')).join('')}</select></div>
+        <div class="fld"><label>Transaction ID <span class="muted">(optional)</span></label><input id="pba-tid" maxlength="256" placeholder="network transaction id"></div>
+        <div class="fld"><label>Profit</label><input id="pba-profit" type="number" step="0.01" placeholder="0.00"></div>
+        <div class="fld"><label>Currency</label><input id="pba-currency" maxlength="3" placeholder="USD"></div>
+      </div>
+      <div class="hint">The click id must already exist. The flow's duplicate mode is applied, and a new purchase spends the offer cap.</div>
+      <div class="row"><div class="spacer"></div><button id="pba-cancel">Cancel</button><button class="primary" id="pba-save">Add conversion</button></div>
+    </div><div id="pb-wrap">${stateHTML('Loading…')}</div>
     <div class="toolbar" style="margin-top:18px"><h2 style="margin:0;font-size:15px">Rejected postbacks</h2><span id="pbe-total" class="muted"></span><div class="spacer"></div><button id="pbe-export">Export CSV</button></div><div id="pbe-wrap">${stateHTML('Loading…')}</div>`;
   q('#pb-group').onchange=()=>{loadPbStatuses();loadPostbacks()};
   q('#pb-status').onchange=loadPostbacks;
@@ -2143,6 +2156,25 @@ async function conversions(_,live){
     window.open('/api/postbacks/export?'+rangeQS()+(g?'&group='+encodeURIComponent(g):'')+(st?'&status='+encodeURIComponent(st):''),'_blank');
   };
   q('#pbe-export').onclick=()=>window.open('/api/postback-errors/export?'+rangeQS(),'_blank');
+  const add=q('#pb-add');
+  q('#pb-add-btn').onclick=()=>{add.hidden=!add.hidden;if(!add.hidden)q('#pba-cid').focus()};
+  q('#pba-cancel').onclick=()=>{add.hidden=true};
+  q('#pba-save').onclick=async()=>{
+    const cid=q('#pba-cid').value.trim(), status=q('#pba-status').value, tid=q('#pba-tid').value.trim();
+    const raw=q('#pba-profit').value.trim(), currency=q('#pba-currency').value.trim();
+    if(!cid){toast('Click ID is required',true);return}
+    if(!raw){toast('Profit is required',true);return}
+    const profit=Number(raw.replace(',','.'));
+    if(!Number.isFinite(profit)){toast('Profit must be a number',true);return}
+    const b=q('#pba-save'); b.disabled=true;
+    try{
+      const r=await call('POST','/api/conversions',{cid,status,tid,profit,currency});
+      toast(r&&r.status==='ignored'?'Duplicate conversion ignored':'Conversion added');
+      add.hidden=true; q('#pba-cid').value=''; q('#pba-tid').value=''; q('#pba-profit').value=''; q('#pba-currency').value='';
+      loadPostbacks();
+    }catch(e){toast(e.message,true)}
+    finally{b.disabled=false}
+  };
   loadPbStatuses();
   loadPostbacks();
   loadPostbackErrors();
