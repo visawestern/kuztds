@@ -25,3 +25,35 @@ jobs:
 
       - name: Test
         run: go test ./... -count=1
+
+      - name: Race
+        run: go test -race ./... -count=1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: UI helper checks
+        run: go test -tags=uitest ./internal/admin/ -count=1
+
+      - name: Integration stores
+        run: |
+          make infra-up
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -sf --data-binary 'SELECT 1' \
+              'http://localhost:8123/?user=kuztds&password=devpassword' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker compose -f deploy/docker-compose.yml logs clickhouse
+            exit 1
+          fi
+          go test -tags=integration ./internal/store/ -count=1
+
+      - name: Stop stores
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v
