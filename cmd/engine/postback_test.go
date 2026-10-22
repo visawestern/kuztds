@@ -3,7 +3,11 @@ package main
 import (
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"testing"
+
+	"github.com/egerkuzma/kuztds/internal/config"
+	"github.com/egerkuzma/kuztds/internal/cost"
 )
 
 // Проводка status/tid (G-301…G-304) в движок.
@@ -81,5 +85,92 @@ func TestPostbackOnCPAGroupNoCHIs200(t *testing.T) {
 	rec := do(t, h, "/?pb=secret&cid=abc&profit=9&status=sale&tid=1", "8.8.8.8", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("postback → 200, got %d", rec.Code)
+	}
+}
+
+// G-305: payout is the compatibility alias for profit, and currency names the
+// amount's ISO code. profit wins when both are present; a broken profit does
+// not shadow a valid payout.
+func TestParsePostbackPayoutAlias(t *testing.T) {
+	cases := []struct {
+		query string
+		want  float64
+		has   bool
+		cur   string
+	}{
+		{"profit=1.5&payout=9", 1.5, true, ""},
+		{"payout=2.25", 2.25, true, ""},
+		{"profit=broken&payout=2.25", 2.25, true, ""},
+		{"profit=broken", 0, false, ""},
+		{"profit=NaN", 0, false, ""},
+		{"payout=+Inf", 0, false, ""},
+		{"profit=1&currency= eur ", 1, true, "EUR"},
+		{"payout=1&currency=USD", 1, true, "USD"},
+	}
+	for _, c := range cases {
+		q, _ := url.ParseQuery("cid=abc&status=sale&" + c.query)
+		pb, ok := parsePostback(q)
+		if !ok || pb.Profit != c.want || pb.HasProfit != c.has || pb.Currency != c.cur {
+			t.Errorf("%s: parsePostback = (%+v,%v), want profit=%v has=%v currency=%q", c.query, pb, ok, c.want, c.has, c.cur)
+		}
+	}
+}
+
+// G-305: an explicit amount is converted to USD before it reaches ClickHouse.
+func TestPostbackCurrencyConvertedToUSD(t *testing.T) {
+	st := &fakePostbackStore{group: "g", offer: "main"}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rates.json")
+	if err := cost.SaveRates(path, map[string]float64{"USD": 1, "EUR": 1.1}, "2026-10-22"); err != nil {
+		t.Fatal(err)
+	}
+	h := testEnv(t, config.NewGroups(&config.Group{
+		ID: "g", Status: true, Redirect: "stop",
+		Offers: []config.Offer{{ID: "main", URL: "https://main.example", Status: true}},
+	}), func(d *engineDeps) {
+		d.pbStore = st
+		d.postbackKey = "secret"
+		d.rates = newRatesStore(path, d.log)
+	})
+	do(t, h, "/?pb=secret&cid=c1&status=sale&tid=t1&payout=10&currency=eur", "8.8.8.8", nil)
+	if st.lastProfit != 11 {
+		t.Fatalf("recorded profit = %v, want 11 USD", st.lastProfit)
+	}
+}
+
+// G-305: currency conversion must not depend on an offer being attached to the
+// click, and a rate-less currency must never be stored as if it were USD.
+func TestPostbackCurrencyWithoutOffer(t *testing.T) {
+	ratesPath := filepath.Join(t.TempDir(), "rates.json")
+	if err := cost.SaveRates(ratesPath, map[string]float64{"USD": 1, "EUR": 1.1}, "2026-10-22"); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		offer string
+		query string
+		want  float64
+	}{
+		{"no offer, EUR", "", "payout=10&currency=EUR", 11},
+		{"no offer, unknown currency", "", "payout=10&currency=GBP", 0},
+		{"offer, unknown currency", "main", "profit=10&currency=GBP", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := &fakePostbackStore{group: "g", offer: c.offer}
+			grp := &config.Group{ID: "g", Status: true, Redirect: "stop"}
+			if c.offer != "" {
+				grp.Offers = []config.Offer{{ID: c.offer, URL: "https://main.example", Status: true}}
+			}
+			h := testEnv(t, config.NewGroups(grp), func(d *engineDeps) {
+				d.pbStore = st
+				d.postbackKey = "secret"
+				d.rates = newRatesStore(ratesPath, d.log)
+			})
+			do(t, h, "/?pb=secret&cid=c1&status=sale&tid=t1&"+c.query, "8.8.8.8", nil)
+			if st.lastProfit != c.want {
+				t.Fatalf("recorded profit = %v, want %v", st.lastProfit, c.want)
+			}
+		})
 	}
 }

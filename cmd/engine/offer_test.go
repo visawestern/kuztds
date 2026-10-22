@@ -96,28 +96,36 @@ func TestEffectiveProfit(t *testing.T) {
 		name   string
 		profit float64
 		has    bool
+		cur    string
 		offer  string
 		want   float64
 		wantOK bool
 	}{
-		{"postback profit wins", 9, true, "usd", 9, true},
-		{"explicit zero in the message wins", 0, true, "usd", 0, true},
-		{"offer payout in USD", 0, false, "usd", 2.5, true},
-		{"offer payout converted", 0, false, "eur", 2.75, true},
-		{"offer without payout", 0, false, "nopay", 0, true},
-		{"unknown offer", 0, false, "missing", 0, true},
-		{"no offer at all", 0, false, "", 0, true},
+		{"postback profit wins", 9, true, "", "usd", 9, true},
+		{"explicit zero in the message wins", 0, true, "", "usd", 0, true},
+		{"postback amount in EUR converted", 10, true, "EUR", "usd", 11, true},
+		{"postback amount in USD", 10, true, "USD", "eur", 10, true},
+		{"offer payout in USD", 0, false, "", "usd", 2.5, true},
+		{"offer payout converted", 0, false, "", "eur", 2.75, true},
+		{"currency is ignored without an amount", 0, false, "EUR", "usd", 2.5, true},
+		{"offer without payout", 0, false, "", "nopay", 0, true},
+		{"unknown offer", 0, false, "", "missing", 0, true},
+		{"no offer at all", 0, false, "", "", 0, true},
 	}
 	for _, c := range cases {
-		got, ok := effectiveProfit(c.profit, c.has, grp, c.offer, rates)
+		pbd := postbackData{Profit: c.profit, HasProfit: c.has, Currency: c.cur}
+		got, ok := effectiveProfit(pbd, grp, c.offer, rates)
 		if got != c.want || ok != c.wantOK {
 			t.Errorf("%s: effectiveProfit = (%v,%v), want (%v,%v)", c.name, got, ok, c.want, c.wantOK)
 		}
 	}
 	// A rate-less currency must say so: the caller records 0 and logs why.
 	grp2 := config.Group{Offers: []config.Offer{{ID: "x", Status: true, Payout: 2.5, Currency: "GBP"}}}
-	if got, ok := effectiveProfit(0, false, grp2, "x", rates); got != 0 || ok {
+	if got, ok := effectiveProfit(postbackData{}, grp2, "x", rates); got != 0 || ok {
 		t.Errorf("GBP without a rate = (%v,%v), want (0,false)", got, ok)
+	}
+	if got, ok := effectiveProfit(postbackData{Profit: 3, HasProfit: true, Currency: "GBP"}, grp2, "x", rates); got != 0 || ok {
+		t.Errorf("postback GBP without a rate = (%v,%v), want (0,false)", got, ok)
 	}
 }
 

@@ -176,7 +176,7 @@ func clip(s string, n int) string {
 // allowlist is deliberate: an unknown parameter may be a token from a network
 // and must not end up in a diagnostic table.
 func redactedPostbackQuery(q url.Values) string {
-	allowed := [...]string{"cid", "status", "tid", "profit"}
+	allowed := [...]string{"cid", "status", "tid", "profit", "payout", "currency"}
 	c := make(url.Values, len(allowed))
 	for _, k := range allowed {
 		if v, ok := q[k]; ok {

@@ -123,14 +123,14 @@ func TestHandlerJournalsRejectedPostback(t *testing.T) {
 }
 
 func TestJournalQueryDropsUnknownTokens(t *testing.T) {
-	q, _ := url.ParseQuery("cid=abc&status=sale&tid=9&profit=1&password=hunter2&token=xyz&pb=secret")
+	q, _ := url.ParseQuery("cid=abc&status=sale&tid=9&profit=1&payout=2&currency=EUR&password=hunter2&token=xyz&pb=secret")
 	got := redactedPostbackQuery(q)
 	for _, bad := range []string{"hunter2", "xyz", "secret", "password", "token"} {
 		if strings.Contains(got, bad) {
 			t.Fatalf("journal query leaked %q: %q", bad, got)
 		}
 	}
-	for _, good := range []string{"cid=abc", "status=sale", "tid=9", "profit=1"} {
+	for _, good := range []string{"cid=abc", "status=sale", "tid=9", "profit=1", "payout=2", "currency=EUR"} {
 		if !strings.Contains(got, good) {
 			t.Fatalf("journal query lost %q: %q", good, got)
 		}

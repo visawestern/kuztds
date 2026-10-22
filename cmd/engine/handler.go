@@ -159,16 +159,30 @@ func (d *engineDeps) root(w http.ResponseWriter, r *http.Request) {
 					convCost := 0.0
 					offer := ""
 					dedupe := config.PostbackDedupeUpdate
+					// G-305: convert an explicit amount before the offer lookup.
+					// The click may have no offer, but the network's currency still
+					// has to reach the USD reports correctly.
+					if pbd.HasProfit {
+						if p, priced := effectiveProfit(pbd, config.Group{}, "", d.rates.Rates()); priced {
+							profit = p
+						} else {
+							profit = 0
+							d.log.Debug("engine: conversion profit skipped (no rates for currency)",
+								"cid", pbd.CID, "currency", pbd.Currency)
+						}
+					}
 					gid, gerr := d.pbStore.EventGroupID(r.Context(), pbd.CID)
 					if gerr == nil && d.groups != nil {
 						if grp, found := d.groups.Get(gid); found {
 							dedupe = grp.PostbackDedupeMode()
 							if offID, oerr := d.pbStore.EventOfferID(r.Context(), pbd.CID); oerr == nil && offID != "" {
 								offer = offID
-								if p, priced := effectiveProfit(pbd.Profit, pbd.HasProfit, *grp, offID, d.rates.Rates()); priced {
-									profit = p
-								} else {
-									d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
+								if !pbd.HasProfit {
+									if p, priced := effectiveProfit(pbd, *grp, offID, d.rates.Rates()); priced {
+										profit = p
+									} else {
+										d.log.Debug("engine: offer payout skipped (no rates for currency)", "offer", offID)
+									}
 								}
 							}
 							m := cost.Model{Kind: grp.Cost.Model, Value: grp.Cost.Value, Currency: grp.Cost.Currency, PayoutPct: grp.Cost.PayoutPct}

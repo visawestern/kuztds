@@ -125,7 +125,7 @@ the uniqueness cookie the client sets, `ztu` by default).
   card is not a tracked click; the follow-up to `/<id>` is.
 - With a keyword: `http://host/<id>?q=KEYWORD`
 - With extra params: `http://host/<id>?p1=...&p2=...` → macros `[PAR-1..5]`
-- Postback pixel: `http://host/?pb=KEY&cid=[CID]&profit=1.50&status=sale` (`status` required; optional `&tid=` transaction id).
+- Postback pixel: `http://host/?pb=KEY&cid=[CID]&profit=1.50&status=sale&currency=EUR` (`status` required; optional `&tid=` transaction id, `payout=` as an alias of `profit=`, `currency=` as the ISO 4217 code of the amount, empty = USD).
   Statuses: `lead`, `sale`, `rejected`, `registration`, `deposit`, `trash`,
   plus your own `[a-z0-9_]{1,32}`. Only `trash` moves the amount from Revenue
   to Revenue (trash); every status is kept in the conversion log. A postback
@@ -369,9 +369,10 @@ An offer also carries a `payout` — the revenue of one conversion — and its
 `currency` (ISO 4217, empty = USD). A conversion's `profit=` from the postback
 always wins, and an explicit zero stays zero. When the message carries no
 amount, the served offer's payout is used, converted to USD with the ECB
-rates. A `profit=` value in the postback itself is taken as USD: other
-currencies are not converted there. A currency without a rate is not guessed: revenue stays 0 and a debug
-line says why. The admin rejects a negative payout or a malformed currency
+rates. A `profit=` (or `payout=`) value in the postback itself is converted
+from `currency=` to USD; empty means USD, and `profit=` wins over `payout=`.
+A currency without a rate is not guessed: revenue stays 0 and a debug line
+says why. The admin rejects a negative payout or a malformed currency
 code.
 
 An offer may also carry `cap_daily` — how many purchases it accepts per UTC

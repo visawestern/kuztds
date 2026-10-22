@@ -19,6 +19,7 @@ type fakePostbackStore struct {
 	records      int
 	lastCID      string
 	lastTID      string
+	lastProfit   float64
 	lastMode     string
 	lastRecorded bool
 	seen         map[string]bool
@@ -32,9 +33,9 @@ func (f *fakePostbackStore) EventOfferID(context.Context, string) (string, error
 	return f.offer, nil
 }
 
-func (f *fakePostbackStore) RecordPostback(_ context.Context, cid string, _ float64, _, tid, _ string, _ float64, mode string) (bool, error) {
+func (f *fakePostbackStore) RecordPostback(_ context.Context, cid string, profit float64, _, tid, _ string, _ float64, mode string) (bool, error) {
 	f.records++
-	f.lastCID, f.lastTID, f.lastMode = cid, tid, mode
+	f.lastCID, f.lastTID, f.lastProfit, f.lastMode = cid, tid, profit, mode
 	f.lastRecorded = false
 	if f.recordErr != nil {
 		return false, f.recordErr
